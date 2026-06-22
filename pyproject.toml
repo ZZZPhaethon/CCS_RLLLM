@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ccs-rlllm"
+version = "0.1.0"
+description = "Modular physical-layer simulator for ship-based CCS logistics."
+requires-python = ">=3.10"
+dependencies = ["searoute>=1.6", "CoolProp>=6.6"]
+
+[project.optional-dependencies]
+routes = ["searoute>=1.6"]
+
+[tool.setuptools.packages.find]
+where = ["src"]

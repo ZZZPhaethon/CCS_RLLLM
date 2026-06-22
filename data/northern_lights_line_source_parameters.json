@@ -1,0 +1,228 @@
+{
+  "case_id": "northern_lights_aurora_line_source_v0",
+  "purpose": "Line-source pressure response inputs for Northern Lights pressure screening. The model estimates p(r,t) and bottomhole pressure for a single injecting well; the same formula is also exposed through simulator reservoir and well snapshots.",
+  "model_scope": {
+    "formula": "Infinite-acting radial line-source solution for a constant-rate single-phase injector.",
+    "reservoir_pressure_definition": "p(r,t) at selected observation radii, not closed-boundary average reservoir pressure.",
+    "rate_definition": "total_injection_rate_mtpa is divided by active_wells before applying the single-well line-source formula."
+  },
+  "public_reported_values": {
+    "project": {
+      "value": "Northern Lights CO2 transport and storage, Aurora storage complex, EL001",
+      "source": "Northern Lights What we do; Equinor Northern Lights facts and figures"
+    },
+    "phase1_capacity_mtpa": {
+      "value": 1.5,
+      "source": "Northern Lights What we do; Equinor Northern Lights facts and figures"
+    },
+    "phase2_min_capacity_mtpa": {
+      "value": 5.0,
+      "source": "Northern Lights What we do; Equinor Northern Lights facts and figures"
+    },
+    "storage_depth_m_below_seabed": {
+      "value": 2600.0,
+      "source": "Northern Lights What we do"
+    },
+    "storage_depth_m_below_seabed_equinor": {
+      "value": 2500.0,
+      "source": "Equinor Northern Lights facts and figures"
+    },
+    "confirmation_well": {
+      "value": "Eos confirmation well drilled in March 2020; Northern Lights states it confirmed reservoir characteristics and storage capacity.",
+      "source": "Northern Lights What we do; Northern Lights About Longship; Equinor Northern Lights facts and figures"
+    },
+    "phase1_wells": {
+      "value": ["31/5-A-7 AH injection well", "31/5-C-1 H contingent well"],
+      "source": "Northern Lights What we do; local docs/northern_lights_data_summary.md"
+    },
+    "concept_report_phase1_well_count": {
+      "value": "single well satellite phase 1 injection",
+      "source": "Northern-Lights-Project-Concept-report.pdf, p.42"
+    },
+    "concept_report_storage_target_mt": {
+      "value": 100.0,
+      "source": "Northern-Lights-Project-Concept-report.pdf, p.31; stated as selecting a storage location giving potential storage of at least 100 Mt"
+    },
+    "concept_report_min_injection_requirement_mtpa_per_well": {
+      "value": 0.8,
+      "source": "Northern-Lights-Project-Concept-report.pdf, p.39"
+    },
+    "concept_report_well_distance_south_of_northern_license_boundary_km": {
+      "value": 10.0,
+      "source": "Northern-Lights-Project-Concept-report.pdf, p.37; also supported by Vebenstad et al. containment risk paper, p.2"
+    },
+    "concept_report_storage_accumulation_depth_m_below_seabed": {
+      "value": 2100.0,
+      "source": "Northern-Lights-Project-Concept-report.pdf, p.37; approximate updip accumulation depth below Troll reservoirs"
+    },
+    "vebenstad_predicted_plume_case": {
+      "value": "Predicted expected CO2 plume extension after 25 years of injection, total 37.5 Mt, shown on cross-section.",
+      "source": "Vebenstad et al., Containment Risk Assessment of the Northern Lights Aurora CO2 Storage Site, Fig. 1, p.3"
+    },
+    "pressure_range_bar": {
+      "value": [200.0, 300.0],
+      "source": "Local docs/northern_lights_data_summary.md, based on Northern Lights facility presentation note"
+    },
+    "temperature_c": {
+      "value": 98.0,
+      "source": "Local docs/northern_lights_data_summary.md, summarizing Marashi Aurora model table"
+    },
+    "temperature_approx_c": {
+      "value": 100.0,
+      "source": "Local docs/northern_lights_data_summary.md, based on Northern Lights facility presentation note"
+    },
+    "formations": {
+      "value": "Johansen and Cook sandstones as main reservoirs; Drake Formation as main caprock.",
+      "source": "Local docs/northern_lights_data_summary.md, summarizing Marashi Aurora model table"
+    },
+    "johansen_cook_thickness_m": {
+      "value": 173.0,
+      "source": "Local docs/northern_lights_data_summary.md, summarizing Marashi Aurora model table"
+    },
+    "porosity_range_fraction": {
+      "value": [0.073, 0.314],
+      "source": "Local docs/northern_lights_data_summary.md, summarizing Marashi Aurora model table"
+    },
+    "horizontal_permeability_range_md": {
+      "value": [0.1, 500.0],
+      "source": "Local docs/northern_lights_data_summary.md, summarizing Marashi Aurora model table"
+    },
+    "concept_report_open_hole_diameter_in": {
+      "value": 8.5,
+      "source": "Northern-Lights-Project-Concept-report.pdf, p.40-p.41; text and well schematic"
+    }
+  },
+  "line_source_inputs": {
+    "initial_pressure_bar": 260.0,
+    "permeability_md": 100.0,
+    "thickness_m": 173.0,
+    "porosity_fraction": 0.22,
+    "total_compressibility_1_pa": 7e-10,
+    "viscosity_pa_s": 6e-5,
+    "co2_density_kg_m3": 630.0,
+    "well_radius_m": 0.10795,
+    "skin": 0.0,
+    "active_wells": 1,
+    "source_status": {
+      "initial_pressure_bar": "chosen_from_reported_range",
+      "permeability_md": "selected_moderate_value_from_reported_model_range",
+      "thickness_m": "reported_model_value",
+      "porosity_fraction": "chosen_from_reported_range",
+      "total_compressibility_1_pa": "engineering_assumption",
+      "viscosity_pa_s": "engineering_assumption_for_dense_or_supercritical_CO2_at_about_100C_and_260bar",
+      "co2_density_kg_m3": "engineering_assumption_for_dense_or_supercritical_CO2_at_about_100C_and_260bar",
+      "well_radius_m": "derived_from_concept_report_8_5_inch_open_hole_radius",
+      "skin": "engineering_assumption",
+      "active_wells": "concept_report_phase1_single_well_satellite"
+    }
+  },
+  "line_source_input_audit": [
+    {
+      "parameter": "initial_pressure_bar",
+      "value": 260.0,
+      "source": "Local docs/northern_lights_data_summary.md, summarizing reported Aurora pressure range 200-300 bar",
+      "confidence": "medium",
+      "rationale": "The pressure range is sourced, but 260 bar is a selected representative value rather than a directly reported initial pressure at the modelled well."
+    },
+    {
+      "parameter": "permeability_md",
+      "value": 100.0,
+      "source": "Local docs/northern_lights_data_summary.md, summarizing Marashi Aurora model horizontal permeability range 0.1-500 mD",
+      "confidence": "medium",
+      "rationale": "The range is model-based; the selected 100 mD is a moderate screening value rather than the optimistic upper bound or a calibrated effective well-test permeability."
+    },
+    {
+      "parameter": "thickness_m",
+      "value": 173.0,
+      "source": "Local docs/northern_lights_data_summary.md, summarizing Marashi Aurora model Johansen/Cook thickness",
+      "confidence": "medium",
+      "rationale": "Reported as a model value, but effective injection thickness near the well may differ."
+    },
+    {
+      "parameter": "porosity_fraction",
+      "value": 0.22,
+      "source": "Local docs/northern_lights_data_summary.md, summarizing Marashi Aurora model porosity range 0.073-0.314",
+      "confidence": "medium",
+      "rationale": "The range is model-based; 0.22 is a representative selected value."
+    },
+    {
+      "parameter": "total_compressibility_1_pa",
+      "value": 7e-10,
+      "source": "Engineering assumption for brine/rock/CO2 system compressibility",
+      "confidence": "low",
+      "rationale": "No Northern Lights-specific compressibility value was found in the reviewed sources."
+    },
+    {
+      "parameter": "viscosity_pa_s",
+      "value": 6e-5,
+      "source": "Engineering assumption for dense/supercritical CO2 near 260 bar and 98-100 C",
+      "confidence": "low",
+      "rationale": "Should be recomputed from an equation of state or property package for the actual CO2 composition and pressure-temperature path."
+    },
+    {
+      "parameter": "co2_density_kg_m3",
+      "value": 630.0,
+      "source": "Engineering assumption for dense/supercritical CO2 near 260 bar and 98-100 C",
+      "confidence": "low",
+      "rationale": "Used only to convert mass rate to reservoir volumetric rate; should be replaced with EOS/property-package output."
+    },
+    {
+      "parameter": "well_radius_m",
+      "value": 0.10795,
+      "source": "Northern-Lights-Project-Concept-report.pdf, p.40-p.41; derived from 8.5 inch open hole diameter in text and well schematic",
+      "confidence": "high",
+      "rationale": "The diameter is directly shown in the concept report; the radius is a direct unit conversion."
+    },
+    {
+      "parameter": "skin",
+      "value": 0.0,
+      "source": "Engineering assumption",
+      "confidence": "low",
+      "rationale": "No well-test skin or completion skin value was found; skin can strongly affect bottomhole pressure."
+    },
+    {
+      "parameter": "active_wells",
+      "value": 1,
+      "source": "Northern-Lights-Project-Concept-report.pdf, p.42; single well satellite phase 1 injection",
+      "confidence": "high",
+      "rationale": "Appropriate for the Phase 1 screening case; future expansion scenarios require an updated well count."
+    }
+  ],
+  "sensitivity_cases": [
+    {
+      "case_id": "baseline_medium_k",
+      "description": "Moderate effective permeability sensitivity for pressure-risk screening.",
+      "permeability_md": 100.0
+    },
+    {
+      "case_id": "low_k",
+      "description": "Lower effective permeability sensitivity; still above the minimum reported grid-scale range.",
+      "permeability_md": 50.0
+    },
+    {
+      "case_id": "high_k_sensitivity",
+      "description": "Upper reported permeability sensitivity retained only as an optimistic comparison case.",
+      "permeability_md": 500.0
+    }
+  ],
+  "study_controls": {
+    "elapsed_days": 365.25,
+    "observation_radii_m": [100.0, 1000.0],
+    "total_injection_rates_mtpa": [0.4, 0.8, 1.5, 2.5, 5.0]
+  },
+  "limitations": [
+    "Single-phase line-source model; real CO2 storage is two-phase CO2-brine displacement.",
+    "Infinite-acting reservoir; no boundaries, faults, vertical heterogeneity, gravity segregation, capillary pressure, or relative permeability.",
+    "Uses one effective permeability and one effective thickness, so results are highly sensitive to kh and viscosity.",
+    "Reservoir pressure output is p(r,t) at selected radii, not field-average reservoir pressure.",
+    "Publicly reported Northern Lights data do not provide every line-source input; assumptions are explicitly labeled.",
+    "The reviewed Concept report and Vebenstad containment-risk paper show license-scale geometry and plume migration direction, but do not provide a drainage radius or equivalent reservoir radius for the line-source model."
+  ],
+  "source_urls": [
+    "https://norlights.com/what-we-do/",
+    "https://norlights.com/how-to-store-co2-with-northern-lights/",
+    "https://norlights.com/about-the-longship-project/",
+    "https://www.equinor.com/energy/northern-lights",
+    "https://ccsnorway.com/transport-storage-northern-lights/"
+  ]
+}
