@@ -440,6 +440,22 @@ class PhysicalLayerTests(unittest.TestCase):
         self.assertAlmostEqual(result.state.entity_inventory_t["ship_1"], 300.0)
         self.assertAlmostEqual(result.mass_balance_error_t, 0.0, places=9)
 
+    def test_emitter_vents_when_capture_exceeds_full_buffer_without_vessel(self):
+        network = PhysicalNetwork(time_step_hours=1.0)
+        network.add_entity(Emitter("brevik", nominal_capture_tph=100.0, buffer_capacity_t=150.0))
+        network.add_entity(Vessel("ship_1", capacity_t=800.0, loading_rate_tph=800.0, unloading_rate_tph=800.0))
+        network.connect("brevik", "ship_1")
+        state = PhysicalState(entity_inventory_t={"brevik": 150.0}, vessel_berths={})
+
+        result = network.step(state, actions={"brevik": {"utilization": 1.0}})
+
+        self.assertAlmostEqual(result.state.entity_inventory_t["brevik"], 150.0)
+        self.assertAlmostEqual(result.state.last_capture_tph["brevik"], 0.0)
+        self.assertAlmostEqual(result.state.last_vent_tph["brevik"], 100.0)
+        self.assertAlmostEqual(result.state.cumulative_vent_t["brevik"], 100.0)
+        self.assertAlmostEqual(result.mass_balance_error_t, 0.0, places=9)
+        self.assertTrue(any(v.violation_type == "vented_capture" and v.entity_id == "brevik" for v in result.violations))
+
     def test_loading_requires_vessel_at_emitter_berth(self):
         network = PhysicalNetwork(time_step_hours=1.0)
         network.add_entity(Emitter("brevik", nominal_capture_tph=0.0, buffer_capacity_t=1_000.0))

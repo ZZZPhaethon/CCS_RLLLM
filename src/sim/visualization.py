@@ -443,7 +443,7 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
     .bar > span {{ display: block; height: 100%; background: var(--component-color, var(--accent)); width: 0%; }}
     .summary {{
       display: grid;
-      grid-template-columns: repeat(4, minmax(120px, 1fr));
+      grid-template-columns: repeat(5, minmax(110px, 1fr));
       gap: 10px;
       padding: 14px;
       border-bottom: 1px solid var(--line);
@@ -580,6 +580,7 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
         <div class="summary">
           <div class="metric"><div class="metric-label">Total inventory</div><div id="totalInventory" class="metric-value">0 t</div></div>
           <div class="metric"><div class="metric-label">Stored</div><div id="injectedTotal" class="metric-value">0 t</div></div>
+          <div class="metric"><div class="metric-label">Vented</div><div id="ventedTotal" class="metric-value">0 t</div></div>
           <div class="metric"><div class="metric-label">Active flows</div><div id="activeFlows" class="metric-value">0</div></div>
           <div class="metric"><div class="metric-label">Violations</div><div id="violationCount" class="metric-value">0</div></div>
         </div>
@@ -635,6 +636,9 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
     const vesselColors = Object.fromEntries(vesselIds.map((id, index) => [id, vesselPalette[index % vesselPalette.length]]));
     const metricDefinitions = {{
       inventory: "Inventory",
+      capture_rate: "Capture rate",
+      vent_rate: "Vent rate",
+      flow_rate: "Flow rate",
       pressure: "Pressure",
       pressure_margin: "Pressure margin",
       injection_rate: "Injection rate"
@@ -704,6 +708,12 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
     }}
 
     function componentSummary(entity) {{
+      if (entity.type === "Emitter") {{
+        return {{
+          primary: formatInventoryLimit(entity),
+          secondary: `Capture ${{formatRate(entity.capture_rate_tph || 0)}} / Vent ${{formatRate(entity.vent_rate_tph || 0)}}`
+        }};
+      }}
       const pressureSummary = pressureSummaryForEntity(entity);
       if (pressureSummary) return pressureSummary;
       return {{
@@ -754,6 +764,8 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
     }}
 
     function availableMetricsForEntity(entity) {{
+      if (entity.type === "Emitter") return ["inventory", "capture_rate", "vent_rate"];
+      if (entity.type === "Pipeline") return ["inventory", "flow_rate"];
       if (entity.type === "InjectionWell") return ["inventory", "pressure", "injection_rate"];
       if (entity.type === "Reservoir") return ["inventory", "pressure", "pressure_margin", "injection_rate"];
       return ["inventory"];
@@ -805,9 +817,11 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
       const entities = Object.values(frame.entities);
       const total = entities.reduce((sum, e) => sum + (e.inventory_t || 0), 0);
       const injected = entities.filter(e => e.type === "Reservoir" || e.type === "InjectionWell").reduce((sum, e) => sum + (e.inventory_t || 0), 0);
+      const vented = entities.filter(e => e.type === "Emitter").reduce((sum, e) => sum + (e.cumulative_vent_t || 0), 0);
       const active = Object.values(frame.flows_t || {{}}).filter(v => v > 0).length;
       document.getElementById("totalInventory").textContent = formatTonnes(total);
       document.getElementById("injectedTotal").textContent = formatTonnes(injected);
+      document.getElementById("ventedTotal").textContent = formatTonnes(vented);
       document.getElementById("activeFlows").textContent = String(active);
       document.getElementById("violationCount").textContent = String((frame.violations || []).length);
     }}
@@ -1250,23 +1264,30 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
         }}
         return 0;
       }}
+      if (metric === "capture_rate") return Number(entity.capture_rate_tph || 0);
+      if (metric === "vent_rate") return Number(entity.vent_rate_tph || 0);
+      if (metric === "flow_rate") return Number(entity.pipeline_flow_rate_tph || 0);
       return Number(entity.inventory_t || 0);
     }}
 
     function pressureReferenceValue(entity, metric) {{
       const params = entity.parameters || {{}};
       if (metric === "pressure" && params.max_pressure_bar) return Number(params.max_pressure_bar);
+      if ((metric === "capture_rate" || metric === "vent_rate") && params.nominal_capture_tph) return Number(params.nominal_capture_tph);
+      if (metric === "flow_rate" && params.max_flow_tph) return Number(params.max_flow_tph);
       return null;
     }}
 
     function pressureReferenceLabel(metric) {{
       if (metric === "pressure") return "max pressure";
+      if (metric === "capture_rate" || metric === "vent_rate") return "nominal capture";
+      if (metric === "flow_rate") return "max flow";
       return "";
     }}
 
     function formatMetricValue(value, metric) {{
       if (metric === "pressure" || metric === "pressure_margin") return formatBar(value);
-      if (metric === "injection_rate") return formatRate(value);
+      if (metric === "injection_rate" || metric === "capture_rate" || metric === "vent_rate" || metric === "flow_rate") return formatRate(value);
       return formatChartValue(value);
     }}
 

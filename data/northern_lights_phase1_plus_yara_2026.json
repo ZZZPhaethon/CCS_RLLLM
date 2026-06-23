@@ -199,7 +199,7 @@
   ],
   "terminal": {
     "entity_id": "oygarden_terminal",
-    "storage_capacity_t": 16000.0,
+    "storage_capacity_t": 9150.0,
     "berth_count": 1,
     "site_name": "Naturgassparken / Oygarden receiving terminal"
   },

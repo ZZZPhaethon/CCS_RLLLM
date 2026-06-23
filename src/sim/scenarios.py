@@ -40,7 +40,6 @@ def _coordinate(values: list[float]) -> tuple[float, float]:
 
 PHASE1_DATA = _load_phase1_data()
 PHASE1_ANNUAL_TARGET_EXPORT_TPY = float(PHASE1_DATA["phase1_annual_target_export_tpy"])
-PHASE1_NOMINAL_CAPTURE_TPH = PHASE1_ANNUAL_TARGET_EXPORT_TPY / 8760.0
 PHASE1_PIPELINE_ANNUAL_CAPACITY_TPY = float(PHASE1_DATA["pipeline_annual_capacity_tpy"])
 PHASE1_PIPELINE_MAX_FLOW_TPH = PHASE1_PIPELINE_ANNUAL_CAPACITY_TPY / 8760.0
 NATURGASSPARKEN = _coordinate(PHASE1_DATA["locations"]["naturgassparken"])
@@ -66,14 +65,15 @@ def build_northern_lights_phase1_demo() -> tuple[PhysicalNetwork, PhysicalState]
 
     network = PhysicalNetwork(time_step_hours=float(PHASE1_DATA["time_step_hours"]))
     for emitter in PHASE1_DATA["emitters"]:
+        annual_target_export_tpy = float(emitter.get("annual_target_export_tpy", PHASE1_ANNUAL_TARGET_EXPORT_TPY))
         network.add_entity(
             Emitter(
                 emitter["entity_id"],
-                nominal_capture_tph=PHASE1_NOMINAL_CAPTURE_TPH,
+                nominal_capture_tph=annual_target_export_tpy / 8760.0,
                 buffer_capacity_t=float(emitter["buffer_capacity_t"]),
                 min_utilization=float(emitter["min_utilization"]),
                 loading_rate_tph=float(emitter["loading_rate_tph"]),
-                annual_target_export_tpy=PHASE1_ANNUAL_TARGET_EXPORT_TPY,
+                annual_target_export_tpy=annual_target_export_tpy,
                 max_production_tph=float(emitter["max_production_tph"]),
                 reference_name=emitter["reference_name"],
             )

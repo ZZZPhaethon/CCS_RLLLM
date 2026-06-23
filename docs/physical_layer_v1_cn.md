@@ -11,7 +11,7 @@
 - 动作：使用普通字典传入，例如 `{"brevik": {"load_vessel": "northern_pioneer"}}`、`{"oygarden_terminal": {"unload_vessel": "northern_pioneer"}}`、`{"oygarden_pipeline": {"flow_tph": 200.0}}`。装船/卸船动作只指定目标船，实际速率由物理层按船舶、泊位、库存和下游能力自动取最大可行值。
 - 输出：`StepResult.as_dict()` 和 `PhysicalNetwork.snapshot()` 可直接序列化为 JSON。
 - 航线：`sim.routes.sea_route()` 使用 `searoute` 包生成海上航路；dashboard 生成时会强制检查 provider，避免静默退回粗糙航路。
-- Phase 1 默认排放方：Norcem/Brevik 与 Fortum Oslo Varme/Celsio，各自 `annual_target_export_tpy=400_000`、`max_production_tph=56`；仿真 `nominal_capture_tph` 按 400,000 t/y 的小时平均值写入。
+- Phase 1 默认排放方：Norcem/Brevik 使用 `annual_target_export_tpy=400_000`、`max_production_tph=56`；Fortum Oslo Varme/Celsio 使用 `annual_target_export_tpy=350_000`、`max_production_tph=48`；仿真 `nominal_capture_tph` 按各自年目标的小时平均值写入。
 - 关键物理参数：船舶标注 `volume_capacity_m3=7_500` 和 `speed_knots=14`；中间存储点为 Naturgassparken / Northern Lights Carbon Capture Plant Site，当前 `berth_count=1`；海上管道标注 `annual_capacity_tpy=5_000_000`、`length_km=100.4`，并以红色 `route_coordinates` 从 Naturgassparken 直接连到 `31/5-7 EOS` / `31/5-A-7 AH` 海底井口位置；注入井使用官方坐标：`31/5-A-7 AH` 为 `60.575913, 3.441678`，`31/5-C-1 H` 为 `60.512961, 3.468346`；Aurora 储层标注 `depth_m=2_600`。
 - 路由口径：`100.4 km` 采用 Northern Lights 设施页详细管道口径；地图显示路线直接收束到 Phase 1 井口/海底分配节点坐标。
 

@@ -23,17 +23,21 @@ def apply_capture(
         current_t = state.entity_inventory_t.get(emitter_id, 0.0)
         free_t = max(0.0, emitter.buffer_capacity_t - current_t)
         actual_t = min(requested_t, free_t)
+        vented_t = requested_t - actual_t
         state.entity_inventory_t[emitter_id] = current_t + actual_t
+        state.last_capture_tph[emitter_id] = actual_t / network.time_step_hours
+        state.last_vent_tph[emitter_id] = vented_t / network.time_step_hours
+        state.cumulative_vent_t[emitter_id] = state.cumulative_vent_t.get(emitter_id, 0.0) + vented_t
         generated_t += actual_t
         if actual_t < requested_t:
             violations.append(
                 Violation(
-                    "buffer_overflow",
+                    "vented_capture",
                     emitter_id,
                     requested_t,
                     actual_t,
-                    requested_t - actual_t,
-                    "Emitter buffer capacity clipped captured CO2.",
+                    vented_t,
+                    "Emitter vented CO2 because its buffer had no remaining capacity.",
                 )
             )
     return generated_t

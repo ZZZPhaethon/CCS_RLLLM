@@ -47,9 +47,9 @@ class ScenarioTests(unittest.TestCase):
         self.assertAlmostEqual(brevik.max_production_tph, 56.0)
         self.assertAlmostEqual(brevik.nominal_capture_tph, 400_000.0 / 8760.0)
         self.assertIsInstance(celsio, Emitter)
-        self.assertAlmostEqual(celsio.annual_target_export_tpy, 400_000.0)
-        self.assertAlmostEqual(celsio.max_production_tph, 56.0)
-        self.assertAlmostEqual(celsio.nominal_capture_tph, 400_000.0 / 8760.0)
+        self.assertAlmostEqual(celsio.annual_target_export_tpy, 350_000.0)
+        self.assertAlmostEqual(celsio.max_production_tph, 48.0)
+        self.assertAlmostEqual(celsio.nominal_capture_tph, 350_000.0 / 8760.0)
         self.assertIsInstance(vessel, Vessel)
         self.assertAlmostEqual(vessel.volume_capacity_m3, 7_500.0)
         self.assertAlmostEqual(vessel.speed_knots, 14.0)
@@ -139,6 +139,10 @@ class ScenarioTests(unittest.TestCase):
         self.assertEqual(len(vessels), 4)
         self.assertEqual(len(wells), 2)
         self.assertIn("yara_sluiskil", network.entities)
+        celsio = network.entities["celsio"]
+        self.assertIsInstance(celsio, Emitter)
+        self.assertAlmostEqual(celsio.annual_target_export_tpy, 350_000.0)
+        self.assertAlmostEqual(celsio.nominal_capture_tph, 350_000.0 / 8760.0)
         self.assertAlmostEqual(
             sum(emitter.annual_target_export_tpy or 0.0 for emitter in emitters),
             payload["contracted_annual_target_export_tpy"],

@@ -64,6 +64,12 @@ class PhysicalNetwork:
         actions = actions or {}
         next_state = state.copy()
         next_state.time_h += self.time_step_hours
+        next_state.last_capture_tph = {
+            emitter_id: 0.0 for emitter_id in self._entities_of_type(Emitter)
+        }
+        next_state.last_vent_tph = {
+            emitter_id: 0.0 for emitter_id in self._entities_of_type(Emitter)
+        }
         next_state.last_injection_flow_tph = {
             well_id: 0.0 for well_id in self._entities_of_type(InjectionWell)
         }

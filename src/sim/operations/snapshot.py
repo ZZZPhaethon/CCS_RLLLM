@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import asdict
 
+from ..entities.emitter import Emitter
+from ..entities.pipeline import Pipeline
 from ..entities.state import PhysicalState
 from ..entities.storage import InjectionWell, Reservoir
 from ..line_source import (
@@ -35,6 +37,12 @@ def _snapshot_entity(network, entity, state: PhysicalState) -> dict[str, object]
         "parameters": asdict(entity),
         "inventory_t": inventory_t,
     }
+    if isinstance(entity, Emitter):
+        snapshot["capture_rate_tph"] = state.last_capture_tph.get(entity.entity_id, 0.0)
+        snapshot["vent_rate_tph"] = state.last_vent_tph.get(entity.entity_id, 0.0)
+        snapshot["cumulative_vent_t"] = state.cumulative_vent_t.get(entity.entity_id, 0.0)
+    if isinstance(entity, Pipeline):
+        snapshot["pipeline_flow_rate_tph"] = state.last_pipeline_flow_tph.get(entity.entity_id, 0.0)
     if isinstance(entity, InjectionWell):
         _add_line_source_well_snapshot(network, snapshot, entity, state)
     if isinstance(entity, Reservoir):
