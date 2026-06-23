@@ -1,12 +1,16 @@
 import json
 import unittest
 
-from sim.entities import Emitter, Pipeline, Reservoir, SubseaManifold, Terminal, Vessel
+from sim.entities import Emitter, InjectionWell, Pipeline, Reservoir, SubseaManifold, Terminal, Vessel
 from sim.routes import route_distance_km
 from sim.scenarios import (
     EOS_SUBSEA_TEMPLATE_LOCATION,
     NATURGASSPARKEN,
     NORTHERN_LIGHTS_PHASE1_DATA_PATH,
+    NORTHERN_LIGHTS_PHASE1_PLUS_YARA_DATA_PATH,
+    NORTHERN_LIGHTS_PHASE2_DATA_PATH,
+    build_northern_lights_phase2_demo,
+    build_northern_lights_phase1_plus_yara_demo,
     build_northern_lights_phase1_demo,
 )
 
@@ -99,6 +103,60 @@ class ScenarioTests(unittest.TestCase):
             payload["line_source_parameters"]["permeability_md"],
         )
         self.assertAlmostEqual(pipeline.length_km, payload["pipeline"]["length_km"])
+
+    def test_phase2_demo_loads_public_scenario_with_current_two_wells(self):
+        network, state = build_northern_lights_phase2_demo()
+        with NORTHERN_LIGHTS_PHASE2_DATA_PATH.open(encoding="utf-8") as handle:
+            payload = json.load(handle)
+
+        emitters = [entity for entity in network.entities.values() if isinstance(entity, Emitter)]
+        vessels = [entity for entity in network.entities.values() if isinstance(entity, Vessel)]
+        wells = [entity for entity in network.entities.values() if isinstance(entity, InjectionWell)]
+
+        self.assertEqual(len(emitters), 5)
+        self.assertEqual(len(vessels), 8)
+        self.assertEqual(len(wells), 2)
+        self.assertNotIn("aurora_phase2_well_1", network.entities)
+        self.assertAlmostEqual(
+            sum(emitter.annual_target_export_tpy or 0.0 for emitter in emitters),
+            payload["contracted_annual_target_export_tpy"],
+        )
+        self.assertEqual(network.downstream_of("aurora_subsea_manifold"), ["aurora_well_a7_ah", "aurora_well_c1_h"])
+        self.assertEqual(network.downstream_of("aurora_well_a7_ah"), ["aurora_reservoir"])
+        self.assertEqual(network.downstream_of("aurora_well_c1_h"), ["aurora_reservoir"])
+        self.assertEqual(state.entity_inventory_t["stockholm_exergi"], 0.0)
+
+    def test_phase1_plus_yara_demo_has_three_emitters_four_ships_and_two_wells(self):
+        network, state = build_northern_lights_phase1_plus_yara_demo()
+        with NORTHERN_LIGHTS_PHASE1_PLUS_YARA_DATA_PATH.open(encoding="utf-8") as handle:
+            payload = json.load(handle)
+
+        emitters = [entity for entity in network.entities.values() if isinstance(entity, Emitter)]
+        vessels = [entity for entity in network.entities.values() if isinstance(entity, Vessel)]
+        wells = [entity for entity in network.entities.values() if isinstance(entity, InjectionWell)]
+
+        self.assertEqual(len(emitters), 3)
+        self.assertEqual(len(vessels), 4)
+        self.assertEqual(len(wells), 2)
+        self.assertIn("yara_sluiskil", network.entities)
+        self.assertAlmostEqual(
+            sum(emitter.annual_target_export_tpy or 0.0 for emitter in emitters),
+            payload["contracted_annual_target_export_tpy"],
+        )
+        self.assertEqual(network.downstream_of("aurora_subsea_manifold"), ["aurora_well_a7_ah", "aurora_well_c1_h"])
+        self.assertEqual(state.entity_inventory_t["yara_sluiskil"], 0.0)
+
+    def test_phase1_plus_yara_pipeline_and_wells_use_1_5_mtpa_capacity(self):
+        network, _ = build_northern_lights_phase1_plus_yara_demo()
+        expected_tph = 1_500_000.0 / 8760.0
+
+        pipeline = network.entities["oygarden_pipeline"]
+        wells = [entity for entity in network.entities.values() if isinstance(entity, InjectionWell)]
+
+        self.assertIsInstance(pipeline, Pipeline)
+        self.assertAlmostEqual(pipeline.max_flow_tph, expected_tph)
+        for well in wells:
+            self.assertAlmostEqual(well.max_injection_tph, expected_tph)
 
 
 if __name__ == "__main__":

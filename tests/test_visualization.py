@@ -3,12 +3,17 @@ import unittest
 from pathlib import Path
 
 from sim.routes import route_distance_km
+from sim.rule_based import RuleBasedActionGenerator
 from sim.visualization import (
     _connect_route_to_facilities,
     _interpolate_route,
     build_demo_trajectory,
+    build_northern_lights_phase1_plus_yara_trajectory,
+    build_northern_lights_phase2_trajectory,
     render_dashboard_html,
     write_dashboard,
+    write_northern_lights_phase1_plus_yara_dashboard,
+    write_northern_lights_phase2_dashboard,
 )
 
 
@@ -531,6 +536,100 @@ class VisualizationTests(unittest.TestCase):
             [segment["id"] for segment in pipeline_segments],
             ["naturgassparken_to_eos_subsea_manifold"],
         )
+
+    def test_phase2_trajectory_uses_public_scenario_and_current_two_wells(self):
+        payload = build_northern_lights_phase2_trajectory(hours=240)
+
+        self.assertEqual(payload["title"], "Northern Lights Phase 2 Dashboard")
+        self.assertEqual(len(payload["frames"]), 241)
+        self.assertEqual(payload["frames"][-1]["time_h"], 240)
+        self.assertEqual(len(payload["map"]["routes"]), 8)
+        self.assertIn("yara_sluiskil", payload["map"]["locations"])
+        self.assertIn("orsted_kalundborg", payload["map"]["locations"])
+        self.assertIn("stockholm_exergi", payload["map"]["locations"])
+        self.assertEqual(
+            [
+                entity_id
+                for entity_id, entity in payload["frames"][0]["entities"].items()
+                if entity["type"] == "InjectionWell"
+            ],
+            ["aurora_well_a7_ah", "aurora_well_c1_h"],
+        )
+        self.assertEqual(
+            {segment["target"] for segment in payload["map"]["pipeline_segments"] if segment.get("style") == "subsea_connection"},
+            {"aurora_well_a7_ah", "aurora_well_c1_h"},
+        )
+        self.assertNotIn("aurora_phase2_well_1", payload["map"]["locations"])
+
+    def test_phase2_routes_cover_every_emitter(self):
+        payload = build_northern_lights_phase2_trajectory(hours=2)
+
+        emitter_ids = {
+            entity_id
+            for entity_id, entity in payload["frames"][0]["entities"].items()
+            if entity["type"] == "Emitter"
+        }
+        route_origins = {
+            route["origin"]
+            for route in payload["map"]["routes"].values()
+        }
+
+        self.assertEqual(route_origins, emitter_ids)
+
+    def test_phase1_plus_yara_trajectory_has_three_emitters_and_four_ships(self):
+        payload = build_northern_lights_phase1_plus_yara_trajectory(hours=72)
+
+        self.assertEqual(payload["title"], "Northern Lights Phase 1 + Yara Dashboard")
+        self.assertEqual(payload["frames"][-1]["time_h"], 72)
+        self.assertEqual(len(payload["map"]["routes"]), 4)
+        self.assertIn("yara_sluiskil", payload["map"]["locations"])
+        self.assertEqual(
+            {
+                entity_id
+                for entity_id, entity in payload["frames"][0]["entities"].items()
+                if entity["type"] == "Emitter"
+            },
+            {"brevik", "celsio", "yara_sluiskil"},
+        )
+        self.assertEqual(
+            {
+                entity_id
+                for entity_id, entity in payload["frames"][0]["entities"].items()
+                if entity["type"] == "InjectionWell"
+            },
+            {"aurora_well_a7_ah", "aurora_well_c1_h"},
+        )
+
+    def test_write_phase1_plus_yara_dashboard(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = write_northern_lights_phase1_plus_yara_dashboard(Path(tmpdir) / "phase1_plus_yara.html", hours=72)
+
+            html = output.read_text(encoding="utf-8")
+
+        self.assertIn("Northern Lights Phase 1 + Yara Dashboard", html)
+        self.assertIn("\"time_h\": 72.0", html)
+        self.assertIn("\"yara_sluiskil\"", html)
+        self.assertNotIn("\"orsted_kalundborg\"", html)
+
+    def test_trajectory_accepts_rule_based_action_generator_factory(self):
+        payload = build_northern_lights_phase1_plus_yara_trajectory(
+            hours=2,
+            action_generator_factory=lambda network, routes: RuleBasedActionGenerator(network, routes),
+        )
+
+        self.assertIn("utilization", str(payload["frames"][1]["actions"]))
+        self.assertIn("well_splits", str(payload["frames"][1]["actions"]))
+
+    def test_write_phase2_dashboard_uses_ten_day_window(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = write_northern_lights_phase2_dashboard(Path(tmpdir) / "phase2.html", hours=240)
+
+            html = output.read_text(encoding="utf-8")
+
+        self.assertIn("Northern Lights Phase 2 Dashboard", html)
+        self.assertIn("\"time_h\": 240.0", html)
+        self.assertIn("\"stockholm_exergi\"", html)
+        self.assertNotIn("\"aurora_phase2_well_1\"", html)
 
 
 if __name__ == "__main__":

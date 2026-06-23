@@ -7,15 +7,21 @@ from pathlib import Path
 from typing import Any
 
 from .actions import ActionFrame, ActionProposal
+from .entities.emitter import Emitter
 from .entities.pipeline import Pipeline
 from .entities.storage import InjectionWell, Reservoir
+from .entities.terminal import Terminal
 from .entities.vessel import Vessel
 from .routes import route_distance_km, sea_route
 from .scenarios import (
     C1_INJECTION_WELL_LOCATION,
     EOS_SUBSEA_TEMPLATE_LOCATION,
     NATURGASSPARKEN,
+    NORTHERN_LIGHTS_PHASE1_PLUS_YARA_DATA_PATH,
+    NORTHERN_LIGHTS_PHASE2_DATA_PATH,
     build_northern_lights_phase1_demo,
+    build_northern_lights_phase1_plus_yara_demo,
+    build_northern_lights_phase2_demo,
 )
 from .simulator import PhysicalSimulator
 
@@ -56,63 +62,134 @@ VESSEL_ROUTES = {
     "northern_pathfinder": ("celsio", "oygarden_terminal", 0.45),
 }
 
-PIPELINE_SEGMENTS = [
-    {
-        "id": "eos_manifold_to_well_a",
-        "pipeline_id": "oygarden_pipeline",
-        "component_id": "aurora_subsea_manifold",
-        "source": "aurora_subsea_manifold",
-        "target": "aurora_well_a",
-        "label": "31/5-7 EOS subsea manifold to 31/5-A-7 AH",
-        "color": "#7c3aed",
-        "style": "subsea_connection",
-    },
-    {
-        "id": "eos_manifold_to_well_c",
-        "pipeline_id": "oygarden_pipeline",
-        "component_id": "aurora_subsea_manifold",
-        "source": "aurora_subsea_manifold",
-        "target": "aurora_well_c",
-        "label": "31/5-7 EOS subsea manifold to 31/5-C-1 H",
-        "color": "#7c3aed",
-        "style": "subsea_connection",
-    },
-]
-
-INJECTION_LINKS = [
-    {
-        "id": "aurora_well_a_to_reservoir",
-        "component_id": "aurora_reservoir",
-        "source": "aurora_well_a",
-        "target": "aurora_reservoir",
-        "label": "31/5-A-7 AH injection target: Aurora reservoir",
-        "color": "#64748b",
-        "relation": "injection_target",
-        "style": "geologic",
-    },
-    {
-        "id": "aurora_well_c_to_reservoir",
-        "component_id": "aurora_reservoir",
-        "source": "aurora_well_c",
-        "target": "aurora_reservoir",
-        "label": "31/5-C-1 H injection target: Aurora reservoir",
-        "color": "#334155",
-        "relation": "injection_target",
-        "style": "geologic",
-    },
-]
-
-
 def build_demo_trajectory(
     hours: int = 48,
     action_frames: list[dict[str, dict[str, Any]]] | None = None,
+    action_generator_factory: Any | None = None,
+) -> dict[str, Any]:
+    network, state = build_northern_lights_phase1_demo()
+    return build_trajectory(
+        network,
+        state,
+        locations=LOCATIONS,
+        hours=hours,
+        action_frames=action_frames,
+        action_generator_factory=action_generator_factory,
+        title="CCS Physical Layer Dashboard",
+    )
+
+
+def build_northern_lights_phase2_trajectory(
+    hours: int = 240,
+    action_frames: list[dict[str, dict[str, Any]]] | None = None,
+    action_generator_factory: Any | None = None,
+) -> dict[str, Any]:
+    network, state = build_northern_lights_phase2_demo()
+    with NORTHERN_LIGHTS_PHASE2_DATA_PATH.open(encoding="utf-8") as handle:
+        scenario_data = json.load(handle)
+    return build_trajectory(
+        network,
+        state,
+        locations=_locations_from_phase2_data(scenario_data),
+        hours=hours,
+        action_frames=action_frames,
+        action_generator_factory=action_generator_factory,
+        title="Northern Lights Phase 2 Dashboard",
+    )
+
+
+def build_northern_lights_phase1_plus_yara_trajectory(
+    hours: int = 72,
+    action_frames: list[dict[str, dict[str, Any]]] | None = None,
+    action_generator_factory: Any | None = None,
+) -> dict[str, Any]:
+    network, state = build_northern_lights_phase1_plus_yara_demo()
+    with NORTHERN_LIGHTS_PHASE1_PLUS_YARA_DATA_PATH.open(encoding="utf-8") as handle:
+        scenario_data = json.load(handle)
+    return build_trajectory(
+        network,
+        state,
+        locations=_locations_from_scenario_data(scenario_data),
+        hours=hours,
+        action_frames=action_frames,
+        action_generator_factory=action_generator_factory,
+        title="Northern Lights Phase 1 + Yara Dashboard",
+    )
+
+
+def _locations_from_phase2_data(data: dict[str, Any]) -> dict[str, dict[str, float | str]]:
+    return _locations_from_scenario_data(data)
+
+
+def _locations_from_scenario_data(data: dict[str, Any]) -> dict[str, dict[str, float | str]]:
+    locations: dict[str, dict[str, float | str]] = {}
+
+    for emitter in data["emitters"]:
+        lat, lon = emitter["coordinates"]
+        locations[emitter["entity_id"]] = {
+            "lat": float(lat),
+            "lon": float(lon),
+            "label": emitter["reference_name"],
+        }
+
+    terminal = data["terminal"]
+    terminal_lat, terminal_lon = data["locations"][terminal["entity_id"]]
+    locations[terminal["entity_id"]] = {
+        "lat": float(terminal_lat),
+        "lon": float(terminal_lon),
+        "label": terminal["site_name"],
+    }
+
+    route = data["offshore_pipeline_route"]
+    midpoint = route[len(route) // 2]
+    locations[data["pipeline"]["entity_id"]] = {
+        "lat": float(midpoint[0]),
+        "lon": float(midpoint[1]),
+        "label": "Offshore CO2 Pipeline",
+    }
+
+    manifold = data["manifold"]
+    manifold_lat, manifold_lon = data["locations"]["eos_subsea_template"]
+    locations[manifold["entity_id"]] = {
+        "lat": float(manifold_lat),
+        "lon": float(manifold_lon),
+        "label": "31/5-7 EOS Subsea Distribution Manifold",
+    }
+
+    for well in data["injection_wells"]:
+        coordinates = well.get("coordinates")
+        if coordinates is None:
+            continue
+        lat, lon = coordinates
+        locations[well["entity_id"]] = {
+            "lat": float(lat),
+            "lon": float(lon),
+            "label": well.get("public_name") or well["entity_id"],
+        }
+
+    locations[data["reservoir"]["entity_id"]] = {
+        "lat": 60.55,
+        "lon": 3.46,
+        "label": "Aurora Reservoir",
+    }
+    return locations
+
+
+def build_trajectory(
+    network: Any,
+    state: Any,
+    locations: dict[str, dict[str, float | str]],
+    hours: int = 48,
+    action_frames: list[dict[str, dict[str, Any]]] | None = None,
+    action_generator_factory: Any | None = None,
+    title: str = "CCS Physical Layer Dashboard",
 ) -> dict[str, Any]:
     if hours < 0:
         raise ValueError("hours must be non-negative")
 
-    network, state = build_northern_lights_phase1_demo()
-    routes = _build_routes(network)
-    simulator = PhysicalSimulator(network, state, routes, _dashboard_locations())
+    routes = _build_routes(network, locations)
+    simulator = PhysicalSimulator(network, state, routes, _dashboard_locations(locations))
+    action_generator = action_generator_factory(network, routes) if action_generator_factory else None
     frames = [
         _frame_from_state(
             network,
@@ -125,8 +202,12 @@ def build_demo_trajectory(
     ]
 
     for hour in range(hours):
-        actions = _actions_at(action_frames, hour)
-        record = simulator.step(ActionFrame(time_h=simulator.state.time_h, proposals=_legacy_action_proposals(actions)))
+        if action_generator is not None:
+            action_frame = action_generator.next_action_frame(simulator.state)
+        else:
+            actions = _actions_at(action_frames, hour)
+            action_frame = ActionFrame(time_h=simulator.state.time_h, proposals=_legacy_action_proposals(actions))
+        record = simulator.step(action_frame)
         frames.append(
             _frame_from_state(
                 network,
@@ -138,21 +219,21 @@ def build_demo_trajectory(
             )
         )
 
-    pioneer_route = routes["northern_pioneer"]
+    first_route = next(iter(routes.values()), {})
     return {
-        "title": "CCS Physical Layer Dashboard",
+        "title": title,
         "time_step_hours": network.time_step_hours,
         "route": {
-            "provider": pioneer_route["provider"],
-            "distance_km": pioneer_route["distance_km"],
-            "coordinates": pioneer_route["coordinates"],
+            "provider": first_route.get("provider"),
+            "distance_km": first_route.get("distance_km"),
+            "coordinates": first_route.get("coordinates", []),
         },
         "map": {
-            "bbox": _map_bbox(routes, network),
-            "locations": LOCATIONS,
+            "bbox": _map_bbox(routes, network, locations),
+            "locations": locations,
             "routes": routes,
-            "pipeline_segments": _build_pipeline_segments(network),
-            "injection_links": _build_injection_links(network),
+            "pipeline_segments": _build_pipeline_segments(network, locations),
+            "injection_links": _build_injection_links(network, locations),
         },
         "connections": [
             {"source": connection.source, "target": connection.target}
@@ -1434,18 +1515,60 @@ def write_dashboard(
     path: str | Path,
     hours: int = 48,
     action_frames: list[dict[str, dict[str, Any]]] | None = None,
+    action_generator_factory: Any | None = None,
 ) -> Path:
     output_path = Path(path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(render_dashboard_html(build_demo_trajectory(hours, action_frames)), encoding="utf-8")
+    output_path.write_text(
+        render_dashboard_html(build_demo_trajectory(hours, action_frames, action_generator_factory)),
+        encoding="utf-8",
+    )
     return output_path
 
 
-def _build_routes(network: Any) -> dict[str, dict[str, Any]]:
+def write_northern_lights_phase2_dashboard(
+    path: str | Path,
+    hours: int = 240,
+    action_frames: list[dict[str, dict[str, Any]]] | None = None,
+    action_generator_factory: Any | None = None,
+) -> Path:
+    output_path = Path(path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(
+        render_dashboard_html(build_northern_lights_phase2_trajectory(hours, action_frames, action_generator_factory)),
+        encoding="utf-8",
+    )
+    return output_path
+
+
+def write_northern_lights_phase1_plus_yara_dashboard(
+    path: str | Path,
+    hours: int = 72,
+    action_frames: list[dict[str, dict[str, Any]]] | None = None,
+    action_generator_factory: Any | None = None,
+) -> Path:
+    output_path = Path(path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(
+        render_dashboard_html(build_northern_lights_phase1_plus_yara_trajectory(hours, action_frames, action_generator_factory)),
+        encoding="utf-8",
+    )
+    return output_path
+
+
+def _build_routes(network: Any, locations: dict[str, dict[str, float | str]]) -> dict[str, dict[str, Any]]:
     routes: dict[str, dict[str, Any]] = {}
-    for vessel_id, (origin_id, destination_id, _) in VESSEL_ROUTES.items():
-        origin = _location_tuple(origin_id)
-        destination = _location_tuple(destination_id)
+    origin_usage: dict[str, int] = {}
+    for vessel_id, entity in network.entities.items():
+        if not isinstance(entity, Vessel):
+            continue
+        origin_id = _route_origin_for_vessel(network, vessel_id, origin_usage)
+        destination_id = _route_destination_for_vessel(network, vessel_id)
+        if origin_id is None or destination_id is None:
+            continue
+        origin_usage[origin_id] = origin_usage.get(origin_id, 0) + 1
+        origin = _location_tuple(origin_id, locations)
+        destination = _location_tuple(destination_id, locations)
         route = sea_route(origin, destination)
         if route.provider != "searoute":
             raise RuntimeError("Dashboard route generation requires searoute. Install it with `python -m pip install searoute`.")
@@ -1463,6 +1586,24 @@ def _build_routes(network: Any) -> dict[str, dict[str, Any]]:
             "return_policy": "same_corridor_reverse",
         }
     return routes
+
+
+def _route_origin_for_vessel(network: Any, vessel_id: str, origin_usage: dict[str, int]) -> str | None:
+    emitter_ids = [
+        upstream_id
+        for upstream_id in network.upstream_of(vessel_id)
+        if isinstance(network.entities.get(upstream_id), Emitter)
+    ]
+    if not emitter_ids:
+        return None
+    return min(emitter_ids, key=lambda emitter_id: (origin_usage.get(emitter_id, 0), emitter_ids.index(emitter_id)))
+
+
+def _route_destination_for_vessel(network: Any, vessel_id: str) -> str | None:
+    for downstream_id in network.downstream_of(vessel_id):
+        if isinstance(network.entities.get(downstream_id), Terminal):
+            return downstream_id
+    return None
 
 
 def _vessel_speed_knots(network: Any, vessel_id: str) -> float | None:
@@ -1537,46 +1678,78 @@ def _densify_route(coordinates: list[Coordinate], max_segment_km: float) -> list
     return densified
 
 
-def _build_pipeline_segments(network: Any) -> list[dict[str, Any]]:
+def _build_pipeline_segments(network: Any, locations: dict[str, dict[str, float | str]]) -> list[dict[str, Any]]:
     segments: list[dict[str, Any]] = []
-    pipeline = network.entities.get("oygarden_pipeline")
-    if isinstance(pipeline, Pipeline) and pipeline.route_coordinates:
+    for pipeline_id, pipeline in network.entities.items():
+        if not isinstance(pipeline, Pipeline) or not pipeline.route_coordinates:
+            continue
+        upstream_terminal = _first_upstream_of_type(network, pipeline_id, Terminal)
+        downstream_manifold = network.downstream_of(pipeline_id)[0] if network.downstream_of(pipeline_id) else None
+        if upstream_terminal is None or downstream_manifold is None:
+            continue
         segments.append(
             {
                 "id": "naturgassparken_to_eos_subsea_manifold",
                 "pipeline_id": pipeline.entity_id,
                 "component_id": pipeline.entity_id,
-                "source": "oygarden_terminal",
-                "target": "aurora_subsea_manifold",
+                "source": upstream_terminal,
+                "target": downstream_manifold,
                 "label": "Offshore pipeline from Naturgassparken to 31/5-7 EOS subsea manifold",
                 "color": pipeline.route_color or "#ff0000",
                 "coordinates": pipeline.route_coordinates,
                 "length_km": pipeline.length_km,
             }
         )
-    for segment in PIPELINE_SEGMENTS:
-        source = _location_tuple(str(segment["source"]))
-        target = _location_tuple(str(segment["target"]))
-        segments.append(
-            {
-                **segment,
-                "coordinates": [source, target],
-            }
-        )
+    for manifold_id, entity in network.entities.items():
+        if entity.__class__.__name__ != "SubseaManifold":
+            continue
+        for well_id in network.downstream_of(manifold_id):
+            if not isinstance(network.entities.get(well_id), InjectionWell):
+                continue
+            source = _location_tuple(manifold_id, locations)
+            target = _location_tuple(well_id, locations)
+            segments.append(
+                {
+                    "id": f"{manifold_id}_to_{well_id}",
+                    "pipeline_id": "oygarden_pipeline",
+                    "component_id": manifold_id,
+                    "source": manifold_id,
+                    "target": well_id,
+                    "label": f"{manifold_id} to {well_id}",
+                    "color": "#7c3aed",
+                    "style": "subsea_connection",
+                    "coordinates": [source, target],
+                }
+            )
     return segments
 
 
-def _build_injection_links(network: Any) -> list[dict[str, Any]]:
+def _first_upstream_of_type(network: Any, entity_id: str, entity_type: type) -> str | None:
+    for upstream_id in network.upstream_of(entity_id):
+        if isinstance(network.entities.get(upstream_id), entity_type):
+            return upstream_id
+    return None
+
+
+def _build_injection_links(network: Any, locations: dict[str, dict[str, float | str]]) -> list[dict[str, Any]]:
     links: list[dict[str, Any]] = []
-    valid_connections = {(connection.source, connection.target) for connection in network.connections}
-    for link in INJECTION_LINKS:
-        if (str(link["source"]), str(link["target"])) not in valid_connections:
+    for connection in network.connections:
+        source_entity = network.entities.get(connection.source)
+        target_entity = network.entities.get(connection.target)
+        if not isinstance(source_entity, InjectionWell) or not isinstance(target_entity, Reservoir):
             continue
-        source = _location_tuple(str(link["source"]))
-        target = _location_tuple(str(link["target"]))
+        source = _location_tuple(connection.source, locations)
+        target = _location_tuple(connection.target, locations)
         links.append(
             {
-                **link,
+                "id": f"{connection.source}_to_{connection.target}",
+                "component_id": connection.target,
+                "source": connection.source,
+                "target": connection.target,
+                "label": f"{connection.source} injection target: {connection.target}",
+                "color": "#64748b",
+                "relation": "injection_target",
+                "style": "geologic",
                 "coordinates": [source, target],
             }
         )
@@ -1675,10 +1848,10 @@ def _legacy_action_proposals(actions: dict[str, dict[str, Any]]) -> list[ActionP
     return proposals
 
 
-def _dashboard_locations() -> dict[str, Coordinate]:
+def _dashboard_locations(locations: dict[str, dict[str, float | str]]) -> dict[str, Coordinate]:
     return {
         location_id: (float(location["lat"]), float(location["lon"]))
-        for location_id, location in LOCATIONS.items()
+        for location_id, location in locations.items()
     }
 
 
@@ -1839,16 +2012,20 @@ def _interpolate_route(coordinates: list[Coordinate], progress: float) -> Coordi
     return coordinates[-1]
 
 
-def _map_bbox(routes: dict[str, dict[str, Any]], network: Any) -> dict[str, float]:
+def _map_bbox(
+    routes: dict[str, dict[str, Any]],
+    network: Any,
+    locations: dict[str, dict[str, float | str]],
+) -> dict[str, float]:
     coordinates: list[Coordinate] = []
-    for location in LOCATIONS.values():
+    for location in locations.values():
         coordinates.append((float(location["lat"]), float(location["lon"])))
     for route in routes.values():
         coordinates.extend(route["coordinates"])
         coordinates.extend(route["return_coordinates"])
-    for segment in _build_pipeline_segments(network):
+    for segment in _build_pipeline_segments(network, locations):
         coordinates.extend(segment["coordinates"])
-    for link in _build_injection_links(network):
+    for link in _build_injection_links(network, locations):
         coordinates.extend(link["coordinates"])
     lats = [lat for lat, _ in coordinates]
     lons = [lon for _, lon in coordinates]
@@ -1860,6 +2037,6 @@ def _map_bbox(routes: dict[str, dict[str, Any]], network: Any) -> dict[str, floa
     }
 
 
-def _location_tuple(location_id: str) -> Coordinate:
-    location = LOCATIONS[location_id]
+def _location_tuple(location_id: str, locations: dict[str, dict[str, float | str]] = LOCATIONS) -> Coordinate:
+    location = locations[location_id]
     return (float(location["lat"]), float(location["lon"]))
