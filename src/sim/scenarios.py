@@ -15,10 +15,22 @@ from .network import PhysicalNetwork
 
 ROOT = Path(__file__).resolve().parents[2]
 NORTHERN_LIGHTS_PHASE1_DATA_PATH = ROOT / "data" / "northern_lights_phase1_demo.json"
+NORTHERN_LIGHTS_PHASE1_PLUS_YARA_DATA_PATH = ROOT / "data" / "northern_lights_phase1_plus_yara_2026.json"
+NORTHERN_LIGHTS_PHASE2_DATA_PATH = ROOT / "data" / "northern_lights_phase2_scenario.json"
 
 
 def _load_phase1_data() -> dict:
     with NORTHERN_LIGHTS_PHASE1_DATA_PATH.open(encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def _load_phase2_data() -> dict:
+    with NORTHERN_LIGHTS_PHASE2_DATA_PATH.open(encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def _load_phase1_plus_yara_data() -> dict:
+    with NORTHERN_LIGHTS_PHASE1_PLUS_YARA_DATA_PATH.open(encoding="utf-8") as handle:
         return json.load(handle)
 
 
@@ -156,6 +168,123 @@ def build_northern_lights_phase1_demo() -> tuple[PhysicalNetwork, PhysicalState]
             "aurora_well_a": 0.0,
             "aurora_well_c": 0.0,
             "aurora_reservoir": 0.0,
+        }
+    )
+    return network, state
+
+
+def build_northern_lights_phase2_demo() -> tuple[PhysicalNetwork, PhysicalState]:
+    """Phase 2-style topology from the public-data scenario JSON.
+
+    The scenario keeps the current two public well locations for visualization and
+    high-level operations checks; it does not instantiate placeholder Phase 2 wells
+    whose coordinates are not public in the reviewed sources.
+    """
+
+    return _build_network_from_scenario_data(_load_phase2_data())
+
+
+def build_northern_lights_phase1_plus_yara_demo() -> tuple[PhysicalNetwork, PhysicalState]:
+    """Commercial ramp-up scenario with Brevik, Celsio, Yara, and four Phase 1 ships."""
+
+    return _build_network_from_scenario_data(_load_phase1_plus_yara_data())
+
+
+def _build_network_from_scenario_data(data: dict) -> tuple[PhysicalNetwork, PhysicalState]:
+    network = PhysicalNetwork(time_step_hours=float(data["time_step_hours"]))
+
+    for emitter in data["emitters"]:
+        annual_target_export_tpy = float(emitter["annual_target_export_tpy"])
+        network.add_entity(
+            Emitter(
+                emitter["entity_id"],
+                nominal_capture_tph=float(emitter.get("nominal_capture_tph", annual_target_export_tpy / 8760.0)),
+                buffer_capacity_t=float(emitter["buffer_capacity_t"]),
+                min_utilization=float(emitter["min_utilization"]),
+                loading_rate_tph=float(emitter["loading_rate_tph"]),
+                annual_target_export_tpy=annual_target_export_tpy,
+                max_production_tph=float(emitter["max_production_tph"]),
+                reference_name=emitter["reference_name"],
+            )
+        )
+
+    for vessel in data["vessels"]:
+        network.add_entity(
+            Vessel(
+                vessel["entity_id"],
+                capacity_t=float(vessel["capacity_t"]),
+                loading_rate_tph=float(vessel["loading_rate_tph"]),
+                unloading_rate_tph=float(vessel["unloading_rate_tph"]),
+                volume_capacity_m3=float(vessel["volume_capacity_m3"]),
+                speed_knots=float(vessel["speed_knots"]),
+            )
+        )
+
+    terminal = data["terminal"]
+    network.add_entity(
+        Terminal(
+            terminal["entity_id"],
+            storage_capacity_t=float(terminal["storage_capacity_t"]),
+            berth_count=int(terminal["berth_count"]),
+            site_name=terminal["site_name"],
+        )
+    )
+
+    pipeline = data["pipeline"]
+    network.add_entity(
+        Pipeline(
+            pipeline["entity_id"],
+            max_flow_tph=float(pipeline["max_flow_tph"]),
+            ramp_tph=float(pipeline["ramp_tph"]),
+            annual_capacity_tpy=float(pipeline["annual_capacity_tpy"]),
+            length_km=float(pipeline["length_km"]),
+            route_color=pipeline["route_color"],
+            route_coordinates=[_coordinate(point) for point in data["offshore_pipeline_route"]],
+        )
+    )
+
+    manifold = data["manifold"]
+    network.add_entity(
+        SubseaManifold(
+            manifold["entity_id"],
+            max_flow_tph=float(manifold["max_flow_tph"]),
+        )
+    )
+
+    for well in data["injection_wells"]:
+        network.add_entity(
+            InjectionWell(
+                well["entity_id"],
+                max_injection_tph=float(well["max_injection_tph"]),
+            )
+        )
+
+    reservoir = data["reservoir"]
+    network.add_entity(
+        Reservoir(
+            reservoir["entity_id"],
+            storage_capacity_t=float(reservoir["storage_capacity_t"]),
+            initial_pressure_bar=float(reservoir["initial_pressure_bar"]),
+            pressure_at_capacity_bar=float(reservoir["pressure_at_capacity_bar"]),
+            max_pressure_bar=float(reservoir["max_pressure_bar"]),
+            depth_m=float(reservoir["depth_m"]),
+            line_source_parameters=LineSourceParameters(**data["line_source_parameters"]),
+            line_source_observation_radii_m=tuple(
+                float(radius_m)
+                for radius_m in reservoir["line_source_observation_radii_m"]
+            ),
+            line_source_well_distances_m=reservoir["line_source_well_distances_m"],
+            line_source_parameter_status=dict(data["line_source_parameter_status"]),
+        )
+    )
+
+    for source, target in data["connections"]:
+        network.connect(source, target)
+
+    state = PhysicalState(
+        entity_inventory_t={
+            entity_id: 0.0
+            for entity_id in network.entities
         }
     )
     return network, state
