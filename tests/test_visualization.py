@@ -54,6 +54,33 @@ class VisualizationTests(unittest.TestCase):
         self.assertEqual(payload["frames"][2]["flows_t"], {})
         self.assertAlmostEqual(payload["frames"][2]["entities"]["northern_pioneer"]["inventory_t"], 45.662100456621)
 
+    def test_trajectory_uses_hourly_emitter_value_without_serializing_full_profile(self):
+        network = PhysicalNetwork(time_step_hours=1.0)
+        network.add_entity(
+            Emitter(
+                "profiled",
+                nominal_capture_tph=100.0,
+                buffer_capacity_t=1_000.0,
+                hourly_capture_profile_tph=(3.0, 7.0),
+            )
+        )
+
+        payload = build_trajectory(
+            network,
+            PhysicalState(),
+            locations={"profiled": {"lat": 0.0, "lon": 0.0, "label": "Profiled emitter"}},
+            hours=2,
+        )
+        emitter_frames = [
+            frame["entities"]["profiled"]
+            for frame in payload["frames"]
+        ]
+
+        self.assertAlmostEqual(emitter_frames[1]["capture_rate_tph"], 3.0)
+        self.assertAlmostEqual(emitter_frames[2]["capture_rate_tph"], 7.0)
+        for emitter in emitter_frames:
+            self.assertNotIn("hourly_capture_profile_tph", emitter["parameters"])
+
     def test_agent_sail_action_moves_vessel_without_loading_or_unloading(self):
         payload = build_demo_trajectory(
             hours=2,

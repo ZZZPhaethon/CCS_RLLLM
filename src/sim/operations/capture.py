@@ -11,11 +11,12 @@ def apply_capture(
     violations: list[Violation],
 ) -> float:
     generated_t = 0.0
+    interval_start_h = state.time_h - network.time_step_hours
     for emitter_id, emitter in network._entities_of_type(Emitter).items():
         utilization = actions.get(emitter_id, {}).get("utilization", emitter.default_utilization)
         utilization = max(emitter.min_utilization, min(1.0, utilization))
         requested_t = (
-            emitter.nominal_capture_tph
+            emitter.capture_rate_tph_at(interval_start_h)
             * utilization
             * emitter.availability
             * network.time_step_hours
