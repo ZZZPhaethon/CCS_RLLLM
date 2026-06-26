@@ -1,0 +1,67 @@
+import unittest
+
+try:
+    import numpy as np
+    import gymnasium  # noqa: F401
+
+    from sim.gym_env import CCSGymEnv, flat_action_mask
+    HAVE_GYM = True
+except ImportError:
+    HAVE_GYM = False
+
+from sim.env import CCSEnv, CCSEnvConfig
+from sim.scenario import ScenarioConfig, ScenarioGenerator
+from test_env import _LOCATIONS, _network
+
+
+def _gym_env() -> "CCSGymEnv":
+    native = CCSEnv(
+        _network(),
+        _LOCATIONS,
+        scenario_generator=ScenarioGenerator(config=ScenarioConfig(episode_hours=24)),
+        config=CCSEnvConfig(episode_hours=24),
+    )
+    return CCSGymEnv(native)
+
+
+@unittest.skipUnless(HAVE_GYM, "gymnasium/numpy not installed")
+class GymWrapperTests(unittest.TestCase):
+    def test_spaces_match_native_env(self):
+        env = _gym_env()
+        self.assertEqual(list(env.action_space.nvec), env.env.action_dims)
+        self.assertEqual(env.observation_space.shape, (env.env.observation_size,))
+
+    def test_reset_returns_array_and_info(self):
+        env = _gym_env()
+        obs, info = env.reset(seed=0)
+        self.assertEqual(obs.shape, (env.env.observation_size,))
+        self.assertEqual(obs.dtype, np.float32)
+        self.assertIsInstance(info, dict)
+
+    def test_action_masks_flatten_in_multidiscrete_order(self):
+        env = _gym_env()
+        env.reset(seed=0)
+        masks = env.action_masks()
+        self.assertEqual(masks.shape, (sum(env.env.action_dims),))
+        self.assertEqual(masks.dtype, bool)
+
+    def test_step_returns_five_tuple_with_truncation(self):
+        env = _gym_env()
+        env.reset(seed=0)
+        terminated = truncated = False
+        steps = 0
+        while not (terminated or truncated):
+            legal = [0] * len(env.env.action_dims)  # all-zero is always legal
+            _obs, reward, terminated, truncated, _info = env.step(legal)
+            steps += 1
+        self.assertFalse(terminated)
+        self.assertTrue(truncated)
+        self.assertEqual(steps, env.env.n_steps)
+
+    def test_flat_action_mask_helper(self):
+        flat = flat_action_mask([[True, False, True], [True, True]])
+        self.assertEqual(list(flat), [True, False, True, True, True])
+
+
+if __name__ == "__main__":
+    unittest.main()

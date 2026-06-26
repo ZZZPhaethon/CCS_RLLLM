@@ -5,6 +5,7 @@ from typing import Any
 
 from .action_resolver import ActionResolver
 from .actions import ActionFrame, CommittedActionFrame
+from .disturbances import vessel_speed_factor
 from .entities.state import PhysicalState, StepResult
 from .network import PhysicalNetwork
 from .routes import route_distance_km
@@ -148,10 +149,14 @@ class PhysicalSimulator:
             route = self.routes[vessel_id]
             speed_knots = route.get("speed_knots")
             distance_km = float(route.get("distance_km") or 0.0)
-            if not speed_knots or distance_km <= 0.0:
-                state["progress"] = 1.0
+            speed_factor = vessel_speed_factor(self.state, vessel_id)
+            effective_speed_knots = float(speed_knots) * speed_factor if speed_knots else 0.0
+            if effective_speed_knots <= 0.0 or distance_km <= 0.0:
+                # No nominal speed/distance falls back to instant arrival; a
+                # weather factor of 0 instead stalls the vessel in place.
+                state["progress"] = state["progress"] if speed_knots and speed_factor <= 0.0 else 1.0
             else:
-                distance_covered_km = float(speed_knots) * 1.852 * hours
+                distance_covered_km = effective_speed_knots * 1.852 * hours
                 state["progress"] = min(1.0, state["progress"] + distance_covered_km / distance_km)
             if state["progress"] >= 1.0:
                 state.update(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from ..disturbances import well_max_injection_tph
 from ..entities.state import PhysicalState
 from ..entities.storage import InjectionWell, Reservoir
 
@@ -25,9 +26,10 @@ def inject_to_well(
 def well_remaining_capacity(network, well_id: str, state: PhysicalState) -> float:
     well = network.entities[well_id]
     assert isinstance(well, InjectionWell)
-    if not well.available:
+    effective_max_tph = well_max_injection_tph(state, well)
+    if effective_max_tph <= 0.0:
         return 0.0
-    well_capacity_t = well.max_injection_tph * network.time_step_hours
+    well_capacity_t = effective_max_tph * network.time_step_hours
     reservoir_id = network._single_downstream_of_type(well_id, Reservoir)
     if reservoir_id is None:
         return well_capacity_t

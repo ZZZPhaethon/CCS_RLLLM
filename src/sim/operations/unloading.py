@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from ..disturbances import terminal_berth_count
 from ..entities.state import PhysicalState, Violation
 from ..entities.terminal import Terminal
 from ..entities.vessel import Vessel
@@ -98,9 +99,10 @@ def _terminal_vessels_for_action(
     vessel_ids = network._upstream_of_type(terminal.entity_id, Vessel)
     berthed_vessel_ids = _vessels_berthed_at(vessel_ids, state, terminal.entity_id)
     requested_vessel_id = _requested_unload_vessel_id(terminal.entity_id, actions)
+    berth_count = terminal_berth_count(state, terminal)
     if requested_vessel_id in berthed_vessel_ids:
-        return [requested_vessel_id]
-    return berthed_vessel_ids[: terminal.berth_count]
+        return [requested_vessel_id] if berth_count > 0 else []
+    return berthed_vessel_ids[:berth_count]
 
 
 def _requested_unload_vessel_id(

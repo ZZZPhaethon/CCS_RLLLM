@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .actions import ActionFrame, ActionProposal
+from .disturbances import terminal_berth_count
 from .entities.emitter import Emitter
 from .entities.manifold import SubseaManifold
 from .entities.pipeline import Pipeline
@@ -172,7 +173,7 @@ class RuleBasedActionGenerator:
         if not isinstance(terminal, Terminal):
             return 0.0
         amount_t = 0.0
-        berth_slots = terminal.berth_count
+        berth_slots = terminal_berth_count(state, terminal)
         for vessel_id in self.network._upstream_of_type(terminal_id, Vessel):
             if berth_slots <= 0:
                 break

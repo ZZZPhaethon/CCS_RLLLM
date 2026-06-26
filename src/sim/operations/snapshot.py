@@ -2,6 +2,12 @@ from __future__ import annotations
 
 from dataclasses import asdict
 
+from ..disturbances import (
+    emitter_availability,
+    well_injectivity_factor,
+    well_is_available,
+    well_max_injection_tph,
+)
 from ..entities.emitter import Emitter
 from ..entities.pipeline import Pipeline
 from ..entities.state import PhysicalState
@@ -44,9 +50,14 @@ def _snapshot_entity(network, entity, state: PhysicalState) -> dict[str, object]
         snapshot["capture_rate_tph"] = state.last_capture_tph.get(entity.entity_id, 0.0)
         snapshot["vent_rate_tph"] = state.last_vent_tph.get(entity.entity_id, 0.0)
         snapshot["cumulative_vent_t"] = state.cumulative_vent_t.get(entity.entity_id, 0.0)
+        snapshot["effective_availability"] = emitter_availability(state, entity)
     if isinstance(entity, Pipeline):
         snapshot["pipeline_flow_rate_tph"] = state.last_pipeline_flow_tph.get(entity.entity_id, 0.0)
     if isinstance(entity, InjectionWell):
+        snapshot["injection_rate_tph"] = state.last_injection_flow_tph.get(entity.entity_id, 0.0)
+        snapshot["effective_available"] = well_is_available(state, entity)
+        snapshot["injectivity_factor"] = well_injectivity_factor(state, entity)
+        snapshot["effective_max_injection_tph"] = well_max_injection_tph(state, entity)
         _add_line_source_well_snapshot(network, snapshot, entity, state)
     if isinstance(entity, Reservoir):
         snapshot["pressure_bar"] = entity.pressure_bar(inventory_t)

@@ -9,6 +9,7 @@ from ..line_source import LineSourceParameters
 class InjectionWell:
     entity_id: str
     max_injection_tph: float
+    min_stable_injection_tph: float = 0.0
     injectivity_index_tph_per_bar: float | None = None
     pressure_margin_bar: float | None = None
     available: bool = True
