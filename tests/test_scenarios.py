@@ -1,3 +1,4 @@
+import csv
 import json
 import unittest
 
@@ -47,9 +48,9 @@ class ScenarioTests(unittest.TestCase):
         self.assertAlmostEqual(brevik.max_production_tph, 56.0)
         self.assertAlmostEqual(brevik.nominal_capture_tph, 400_000.0 / 8760.0)
         self.assertIsInstance(celsio, Emitter)
-        self.assertAlmostEqual(celsio.annual_target_export_tpy, 400_000.0)
-        self.assertAlmostEqual(celsio.max_production_tph, 56.0)
-        self.assertAlmostEqual(celsio.nominal_capture_tph, 400_000.0 / 8760.0)
+        self.assertAlmostEqual(celsio.annual_target_export_tpy, 350_000.0)
+        self.assertAlmostEqual(celsio.max_production_tph, 48.0)
+        self.assertAlmostEqual(celsio.nominal_capture_tph, 350_000.0 / 8760.0)
         self.assertIsInstance(vessel, Vessel)
         self.assertAlmostEqual(vessel.volume_capacity_m3, 7_500.0)
         self.assertAlmostEqual(vessel.speed_knots, 14.0)
@@ -139,12 +140,33 @@ class ScenarioTests(unittest.TestCase):
         self.assertEqual(len(vessels), 4)
         self.assertEqual(len(wells), 2)
         self.assertIn("yara_sluiskil", network.entities)
+        celsio = network.entities["celsio"]
+        self.assertIsInstance(celsio, Emitter)
+        self.assertAlmostEqual(celsio.annual_target_export_tpy, 350_000.0)
+        self.assertAlmostEqual(celsio.nominal_capture_tph, 350_000.0 / 8760.0)
         self.assertAlmostEqual(
             sum(emitter.annual_target_export_tpy or 0.0 for emitter in emitters),
             payload["contracted_annual_target_export_tpy"],
         )
         self.assertEqual(network.downstream_of("aurora_subsea_manifold"), ["aurora_well_a7_ah", "aurora_well_c1_h"])
         self.assertEqual(state.entity_inventory_t["yara_sluiskil"], 0.0)
+
+    def test_phase1_plus_yara_demo_uses_hourly_emitter_profile_from_data(self):
+        network, state = build_northern_lights_phase1_plus_yara_demo()
+        profile_path = NORTHERN_LIGHTS_PHASE1_PLUS_YARA_DATA_PATH.parent / (
+            "phase1plus_emitters_capture_rate_profile_hourly.csv"
+        )
+        with profile_path.open(encoding="utf-8", newline="") as handle:
+            first_hour = next(csv.DictReader(handle))
+
+        brevik = network.entities["brevik"]
+        self.assertIsNotNone(getattr(brevik, "hourly_capture_profile_tph", None))
+
+        result = network.step(state)
+
+        expected_rate_tph = float(first_hour["brevik_capture_tph"])
+        self.assertNotAlmostEqual(expected_rate_tph, brevik.nominal_capture_tph)
+        self.assertAlmostEqual(result.state.last_capture_tph["brevik"], expected_rate_tph)
 
     def test_phase1_plus_yara_pipeline_and_wells_use_1_5_mtpa_capacity(self):
         network, _ = build_northern_lights_phase1_plus_yara_demo()

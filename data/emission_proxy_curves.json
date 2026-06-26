@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "last_updated": "2026-06-24",
+  "description": "Normalized monthly proxy curves for emitter emission-profile inference. Values are rate multipliers with mean month = 1, not measured facility CO2 emissions.",
+  "curves": [
+    {
+      "curve_id": "denmark_waste_power_2021_2025_energy_charts",
+      "recommended_use": "Primary Nordic analog proxy for Klemetsrud only if no plant-level monthly waste, heat, or CO2 data is available.",
+      "country": "Denmark",
+      "technology_proxy": "waste-to-energy / waste-fired electricity generation",
+      "source_dataset": "Energy-Charts public_power API",
+      "source_url": "https://api.energy-charts.info/public_power?country=dk&start=2021-01-01&end=2025-12-31",
+      "method": "Hourly Waste generation was averaged by local calendar month for 2021-2025, then the 12 monthly means were normalized so their arithmetic mean is 1.",
+      "limitations": [
+        "Country-level electricity generation, not plant-level emissions.",
+        "Electricity output can differ from waste combustion because CHP plants trade off electricity and heat extraction.",
+        "Use as an analog seasonal shape only; scale separately to the annual CO2 anchor."
+      ],
+      "monthly_rate_mean_1": {
+        "jan": 0.9833,
+        "feb": 1.0007,
+        "mar": 0.9164,
+        "apr": 1.0795,
+        "may": 1.0545,
+        "jun": 0.9402,
+        "jul": 0.9569,
+        "aug": 0.8682,
+        "sep": 0.8562,
+        "oct": 0.9971,
+        "nov": 1.1523,
+        "dec": 1.1947
+      }
+    },
+    {
+      "curve_id": "norway_waste_power_2021_2025_energy_charts",
+      "recommended_use": "Sensitivity case only. It is geographically closer to Klemetsrud, but the summer peak suggests electricity output is affected by CHP heat-electricity allocation and may not track CO2 emissions.",
+      "country": "Norway",
+      "technology_proxy": "waste-to-energy / waste-fired electricity generation",
+      "source_dataset": "Energy-Charts public_power API",
+      "source_url": "https://api.energy-charts.info/public_power?country=no&start=2021-01-01&end=2025-12-31",
+      "method": "Hourly Waste generation was averaged by local calendar month for 2021-2025, then the 12 monthly means were normalized so their arithmetic mean is 1.",
+      "limitations": [
+        "Country-level electricity generation, not plant-level emissions.",
+        "Summer peak is likely not a direct emissions signal for a district-heating waste-to-energy plant.",
+        "Use only as a sensitivity curve unless corroborated by plant-level waste throughput or heat data."
+      ],
+      "monthly_rate_mean_1": {
+        "jan": 0.7861,
+        "feb": 0.8165,
+        "mar": 0.886,
+        "apr": 0.9435,
+        "may": 1.1357,
+        "jun": 1.1543,
+        "jul": 1.3954,
+        "aug": 1.0596,
+        "sep": 0.906,
+        "oct": 0.8784,
+        "nov": 1.0083,
+        "dec": 1.0301
+      }
+    }
+  ]
+}

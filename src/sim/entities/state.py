@@ -9,6 +9,9 @@ class PhysicalState:
 
     time_h: float = 0.0
     entity_inventory_t: dict[str, float] = field(default_factory=dict)
+    last_capture_tph: dict[str, float] = field(default_factory=dict)
+    last_vent_tph: dict[str, float] = field(default_factory=dict)
+    cumulative_vent_t: dict[str, float] = field(default_factory=dict)
     last_pipeline_flow_tph: dict[str, float] = field(default_factory=dict)
     last_injection_flow_tph: dict[str, float] = field(default_factory=dict)
     injection_rate_history_tph: dict[str, list[tuple[float, float]]] = field(default_factory=dict)
@@ -18,6 +21,9 @@ class PhysicalState:
         return PhysicalState(
             time_h=self.time_h,
             entity_inventory_t=dict(self.entity_inventory_t),
+            last_capture_tph=dict(self.last_capture_tph),
+            last_vent_tph=dict(self.last_vent_tph),
+            cumulative_vent_t=dict(self.cumulative_vent_t),
             last_pipeline_flow_tph=dict(self.last_pipeline_flow_tph),
             last_injection_flow_tph=dict(self.last_injection_flow_tph),
             injection_rate_history_tph={
@@ -31,6 +37,9 @@ class PhysicalState:
         return {
             "time_h": self.time_h,
             "entity_inventory_t": dict(self.entity_inventory_t),
+            "last_capture_tph": dict(self.last_capture_tph),
+            "last_vent_tph": dict(self.last_vent_tph),
+            "cumulative_vent_t": dict(self.cumulative_vent_t),
             "last_pipeline_flow_tph": dict(self.last_pipeline_flow_tph),
             "last_injection_flow_tph": dict(self.last_injection_flow_tph),
             "injection_rate_history_tph": {

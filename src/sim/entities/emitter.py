@@ -15,3 +15,10 @@ class Emitter:
     annual_target_export_tpy: float | None = None
     max_production_tph: float | None = None
     reference_name: str | None = None
+    hourly_capture_profile_tph: tuple[float, ...] | None = None
+
+    def capture_rate_tph_at(self, interval_start_h: float) -> float:
+        if not self.hourly_capture_profile_tph:
+            return self.nominal_capture_tph
+        hour_index = int(interval_start_h) % len(self.hourly_capture_profile_tph)
+        return self.hourly_capture_profile_tph[hour_index]

@@ -1,0 +1,234 @@
+{
+  "schema_version": 1,
+  "description": "Emitter-level emission anchors and profile assumptions collected for Northern Lights / CCS shipping scenarios.",
+  "last_updated": "2026-06-24",
+  "profiles": [
+    {
+      "entity_id": "celsio_klemetsrud",
+      "scenario_entity_ids": [
+        "celsio"
+      ],
+      "current_name": "Hafslund Celsio AS avd Klemetsrudveien",
+      "facility_name": "Klemetsrud waste-to-energy plant",
+      "facility_name_local": "Klemetsrud avfallsforbrenningsanlegg",
+      "operator_or_project": "Hafslund Celsio",
+      "country": "Norway",
+      "sector": "waste_to_energy",
+      "activity": "Incineration with energy recovery",
+      "coordinates": {
+        "lat": 59.8406258,
+        "lon": 10.835762,
+        "source": "EEA Industrial Emissions Portal / IED SiteMap"
+      },
+      "identifiers": {
+        "eea_facility_id": "192040",
+        "eea_national_id": "0301.0430.01",
+        "eea_facility_inspire_id": "NO.EEA/0301.0430.01.FACILITY",
+        "norske_utslipp_company_id": "6081",
+        "organisation_number": "979594836"
+      },
+      "aliases": [
+        "Klemetsrud utsorterings- og energigjenvinningsanlegg",
+        "Klemetsrud energigjenvinningsanlegg",
+        "Fortum Oslo Varme AS",
+        "Fortum Oslo Varme",
+        "Hafslund Oslo Celsio AS avd Klemetsrudveien",
+        "Hafslund Celsio AS avd Klemetsrudveien"
+      ],
+      "public_project_anchors": {
+        "gross_co2_emissions_tpy": 400000.0,
+        "annual_capture_target_tpy": 350000.0,
+        "biogenic_fraction": 0.6,
+        "biogenic_co2_removed_tpy": 200000.0,
+        "capture_start_target": "2029-Q3",
+        "source_note": "CCS Norway states approximately 400,000 tCO2/y emitted at Klemetsrud, about 60% biogenic, and 350,000 tCO2/y planned capture."
+      },
+      "technical_notes": {
+        "thermal_capacity_mw": 121.0,
+        "emission_sources": [
+          "line_1_stack_co2",
+          "line_2_stack_co2",
+          "line_3_stack_co2"
+        ],
+        "monitoring_method": "CO2 emissions measured for three waste incineration lines; biomass share determined by sampling and C14 analysis.",
+        "monitoring_plan_status": "Approved 2024-07-09; updated 2026-02-06, version 3."
+      },
+      "historical_annual_emissions": {
+        "source_dataset": "EEA Industrial Reporting v16, F1_4_Air_Releases_Facilities.csv",
+        "publication_date": "2026-02-13",
+        "raw_unit": "kgCO2_per_year",
+        "stored_unit": "tCO2_per_year",
+        "records": [
+          {
+            "year": 2007,
+            "total_co2_tpy": 156000.0,
+            "fossil_co2_excluding_biomass_tpy": 62800.0
+          },
+          {
+            "year": 2008,
+            "total_co2_tpy": 170000.0,
+            "fossil_co2_excluding_biomass_tpy": 68500.0
+          },
+          {
+            "year": 2009,
+            "total_co2_tpy": 170000.0,
+            "fossil_co2_excluding_biomass_tpy": 68500.0
+          },
+          {
+            "year": 2010,
+            "total_co2_tpy": 173000.0,
+            "fossil_co2_excluding_biomass_tpy": 69000.0
+          },
+          {
+            "year": 2011,
+            "total_co2_tpy": 234000.0,
+            "fossil_co2_excluding_biomass_tpy": 96600.0
+          },
+          {
+            "year": 2012,
+            "total_co2_tpy": 300000.0,
+            "fossil_co2_excluding_biomass_tpy": 122000.0
+          },
+          {
+            "year": 2013,
+            "total_co2_tpy": 294000.0,
+            "fossil_co2_excluding_biomass_tpy": 119000.0
+          },
+          {
+            "year": 2014,
+            "total_co2_tpy": 345000.0,
+            "fossil_co2_excluding_biomass_tpy": 140000.0
+          },
+          {
+            "year": 2015,
+            "total_co2_tpy": 310000.0,
+            "fossil_co2_excluding_biomass_tpy": 125000.0
+          },
+          {
+            "year": 2016,
+            "total_co2_tpy": 375000.0,
+            "fossil_co2_excluding_biomass_tpy": 150000.0
+          },
+          {
+            "year": 2017,
+            "total_co2_tpy": 385000.0,
+            "fossil_co2_excluding_biomass_tpy": 186000.0
+          }
+        ]
+      },
+      "profile_derivation_plan": {
+        "observed_monthly_profile_available": false,
+        "do_not_treat_proxy_values_as_measured_data": true,
+        "annual_anchor_options_tpy": {
+          "gross_emissions": 400000.0,
+          "captured_export_target": 350000.0
+        },
+        "preferred_observed_proxies_in_order": [
+          "monthly_waste_incinerated_t",
+          "monthly_co2_cems_t",
+          "monthly_heat_delivered_mwh",
+          "monthly_net_heat_production_mwh",
+          "monthly_electricity_generation_mwh"
+        ],
+        "plant_level_proxy_formula": "monthly_weight_m = proxy_m / mean(proxy_m); monthly_tco2_m = annual_anchor_tco2 * monthly_weight_m * days_m / sum(monthly_weight_m * days_m)",
+        "available_analog_proxy_curves": {
+          "file": "data/emission_proxy_curves.json",
+          "preferred_curve_id_if_no_plant_data": "denmark_waste_power_2021_2025_energy_charts",
+          "norway_curve_id_for_sensitivity_only": "norway_waste_power_2021_2025_energy_charts"
+        },
+        "weather_proxy_status": {
+          "status": "uncalibrated_fallback_only",
+          "formula": "monthly_weight_m = base_load_share + (1 - base_load_share) * hdd_weight_m",
+          "parameters_requiring_calibration": [
+            "base_load_share",
+            "hdd_base_temperature_c"
+          ],
+          "calibrate_against": [
+            "monthly heat delivery",
+            "monthly waste throughput",
+            "monthly plant CO2 if obtained"
+          ],
+          "do_not_store_single_values_without_calibration": true
+        },
+        "normalization": "Scale monthly weights to the selected annual anchor, then divide by hours per month for hourly average rates.",
+        "notes": [
+          "The earlier waste-to-energy monthly template has been removed because it was an assumption, not measured data.",
+          "Use 400,000 tCO2/y for gross emissions and 350,000 tCO2/y for captured/exported CO2.",
+          "No public monthly or hourly plant-level emissions profile was found in Climate TRACE, EEA, or Norske Utslipp.",
+          "If no monthly proxy can be obtained, use named sensitivity scenarios rather than one asserted monthly curve."
+        ]
+      },
+      "source_quality": {
+        "annual_emissions": "high_for_2007_2017_eea_reported_facility_releases",
+        "gross_and_capture_project_anchors": "high_for_public_project_planning_values",
+        "monthly_shape": "not_measured; derive from observed proxy or explicit sensitivity scenario",
+        "climate_trace_status": "not_found_as_clear_source_level_record_in_norway_package_or_api_checks",
+        "norske_utslipp_climate_quota_table_status": "facility_page_found; climate quota tab returned not reported values in the checked page state"
+      },
+      "sources": [
+        {
+          "label": "CCS Norway Hafslund Celsio project page",
+          "url": "https://ccsnorway.com/capture-hafslund-celsio/",
+          "used_for": [
+            "gross_co2_emissions_tpy",
+            "annual_capture_target_tpy",
+            "biogenic_fraction",
+            "capture_start_target"
+          ]
+        },
+        {
+          "label": "Norske Utslipp facility page",
+          "url": "https://www.norskeutslipp.no/no/Diverse/Virksomhet/?CompanyID=6081",
+          "used_for": [
+            "current_name",
+            "sector",
+            "activity",
+            "regulatory_documents"
+          ]
+        },
+        {
+          "label": "Norske Utslipp monitoring plan PDF",
+          "url": "https://www.norskeutslipp.no/WebHandlers/PDFDocumentHandler.ashx?aar=0&companyID=6081&documentID=914563&documentType=T&epslanguage=no",
+          "used_for": [
+            "facility_name_local",
+            "organisation_number",
+            "thermal_capacity_mw",
+            "emission_sources",
+            "monitoring_method"
+          ]
+        },
+        {
+          "label": "EEA Industrial Reporting v16 tabular dataset",
+          "url": "https://sdi.eea.europa.eu/webdav/datastore/public/eea_t_ied-eprtr_p_2007-2024_v16_r00/",
+          "used_for": [
+            "historical_annual_emissions",
+            "facility_inspire_id"
+          ]
+        },
+        {
+          "label": "EEA Industrial Emissions IED SiteMap service",
+          "url": "https://air.discomap.eea.europa.eu/arcgis/rest/services/Air/IED_SiteMap/MapServer",
+          "used_for": [
+            "coordinates",
+            "aliases",
+            "activity"
+          ]
+        },
+        {
+          "label": "Statistics Norway table 09469",
+          "url": "https://www.ssb.no/statbank/table/09469/",
+          "used_for": [
+            "possible annual district-heating context only; not facility-level monthly emissions"
+          ]
+        },
+        {
+          "label": "Open-Meteo historical weather API",
+          "url": "https://open-meteo.com/en/docs/historical-weather-api",
+          "used_for": [
+            "possible weather-based sensitivity proxy only; not plant emissions data"
+          ]
+        }
+      ]
+    }
+  ]
+}

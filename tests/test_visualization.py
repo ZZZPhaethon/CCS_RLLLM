@@ -2,11 +2,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from sim.entities import Emitter, InjectionWell, PhysicalState, Pipeline, Terminal
+from sim.network import PhysicalNetwork
 from sim.routes import route_distance_km
 from sim.rule_based import RuleBasedActionGenerator
 from sim.visualization import (
     _connect_route_to_facilities,
     _interpolate_route,
+    build_trajectory,
     build_demo_trajectory,
     build_northern_lights_phase1_plus_yara_trajectory,
     build_northern_lights_phase2_trajectory,
@@ -50,6 +53,33 @@ class VisualizationTests(unittest.TestCase):
         self.assertAlmostEqual(payload["frames"][1]["entities"]["northern_pioneer"]["inventory_t"], 45.662100456621)
         self.assertEqual(payload["frames"][2]["flows_t"], {})
         self.assertAlmostEqual(payload["frames"][2]["entities"]["northern_pioneer"]["inventory_t"], 45.662100456621)
+
+    def test_trajectory_uses_hourly_emitter_value_without_serializing_full_profile(self):
+        network = PhysicalNetwork(time_step_hours=1.0)
+        network.add_entity(
+            Emitter(
+                "profiled",
+                nominal_capture_tph=100.0,
+                buffer_capacity_t=1_000.0,
+                hourly_capture_profile_tph=(3.0, 7.0),
+            )
+        )
+
+        payload = build_trajectory(
+            network,
+            PhysicalState(),
+            locations={"profiled": {"lat": 0.0, "lon": 0.0, "label": "Profiled emitter"}},
+            hours=2,
+        )
+        emitter_frames = [
+            frame["entities"]["profiled"]
+            for frame in payload["frames"]
+        ]
+
+        self.assertAlmostEqual(emitter_frames[1]["capture_rate_tph"], 3.0)
+        self.assertAlmostEqual(emitter_frames[2]["capture_rate_tph"], 7.0)
+        for emitter in emitter_frames:
+            self.assertNotIn("hourly_capture_profile_tph", emitter["parameters"])
 
     def test_agent_sail_action_moves_vessel_without_loading_or_unloading(self):
         payload = build_demo_trajectory(
@@ -440,6 +470,58 @@ class VisualizationTests(unittest.TestCase):
         self.assertIn("function metricSeries", html)
         self.assertIn("function metricValueForEntity", html)
         self.assertIn("chartMetric.addEventListener", html)
+
+    def test_dashboard_surfaces_emitter_capture_and_vent_metrics(self):
+        network = PhysicalNetwork(time_step_hours=1.0)
+        network.add_entity(Emitter("brevik", nominal_capture_tph=100.0, buffer_capacity_t=150.0))
+        state = PhysicalState(entity_inventory_t={"brevik": 100.0})
+        payload = build_trajectory(
+            network,
+            state,
+            locations={"brevik": {"lat": 59.05, "lon": 9.70, "label": "Brevik"}},
+            hours=1,
+            action_frames=[{"brevik": {"utilization": 1.0}}],
+        )
+
+        emitter = payload["frames"][1]["entities"]["brevik"]
+        html = render_dashboard_html(payload)
+
+        self.assertAlmostEqual(emitter["capture_rate_tph"], 50.0)
+        self.assertAlmostEqual(emitter["vent_rate_tph"], 50.0)
+        self.assertAlmostEqual(emitter["cumulative_vent_t"], 50.0)
+        self.assertIn("Vented", html)
+        self.assertIn("id=\"ventedTotal\"", html)
+        self.assertIn("capture_rate", html)
+        self.assertIn("vent_rate", html)
+        self.assertIn('if (entity.type === "Emitter") return ["inventory", "capture_rate", "vent_rate"]', html)
+
+    def test_dashboard_surfaces_pipeline_flow_rate_chart(self):
+        network = PhysicalNetwork(time_step_hours=1.0)
+        network.add_entity(Terminal("terminal", storage_capacity_t=1_000.0, berth_count=1))
+        network.add_entity(Pipeline("pipeline", max_flow_tph=100.0, ramp_tph=100.0))
+        network.add_entity(InjectionWell("well", max_injection_tph=100.0))
+        network.connect("terminal", "pipeline")
+        network.connect("pipeline", "well")
+        state = PhysicalState(entity_inventory_t={"terminal": 100.0})
+        payload = build_trajectory(
+            network,
+            state,
+            locations={
+                "terminal": {"lat": 60.0, "lon": 4.0, "label": "Terminal"},
+                "pipeline": {"lat": 60.1, "lon": 3.8, "label": "Pipeline"},
+                "well": {"lat": 60.2, "lon": 3.6, "label": "Well"},
+            },
+            hours=1,
+            action_frames=[{"pipeline": {"flow_tph": 100.0}}],
+        )
+
+        pipeline = payload["frames"][1]["entities"]["pipeline"]
+        html = render_dashboard_html(payload)
+
+        self.assertAlmostEqual(pipeline["pipeline_flow_rate_tph"], 100.0)
+        self.assertIn("flow_rate", html)
+        self.assertIn("Flow rate", html)
+        self.assertIn('if (entity.type === "Pipeline") return ["inventory", "flow_rate"]', html)
 
     def test_dashboard_chart_shows_hover_time_and_value(self):
         payload = build_demo_trajectory(hours=2)

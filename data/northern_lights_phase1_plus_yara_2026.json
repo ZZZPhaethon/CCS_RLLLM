@@ -156,7 +156,7 @@
       "annual_target_export_tpy": 800000.0,
       "nominal_capture_tph": 91.324200913242,
       "max_production_tph": 110.0,
-      "buffer_capacity_t": 7500.0,
+      "buffer_capacity_t": 15000.0,
       "min_utilization": 0.0,
       "loading_rate_tph": 800.0,
       "co2_origin": "process_co2",
@@ -199,7 +199,7 @@
   ],
   "terminal": {
     "entity_id": "oygarden_terminal",
-    "storage_capacity_t": 16000.0,
+    "storage_capacity_t": 9150.0,
     "berth_count": 1,
     "site_name": "Naturgassparken / Oygarden receiving terminal"
   },

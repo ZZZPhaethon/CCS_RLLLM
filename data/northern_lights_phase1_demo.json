@@ -89,6 +89,7 @@
   "emitters": [
     {
       "entity_id": "brevik",
+      "annual_target_export_tpy": 400000.0,
       "buffer_capacity_t": 7500.0,
       "min_utilization": 0.0,
       "loading_rate_tph": 800.0,
@@ -97,10 +98,11 @@
     },
     {
       "entity_id": "celsio",
+      "annual_target_export_tpy": 350000.0,
       "buffer_capacity_t": 7500.0,
       "min_utilization": 0.0,
       "loading_rate_tph": 800.0,
-      "max_production_tph": 56.0,
+      "max_production_tph": 48.0,
       "reference_name": "Fortum Oslo Varme"
     }
   ],
@@ -124,7 +126,7 @@
   ],
   "terminal": {
     "entity_id": "oygarden_terminal",
-    "storage_capacity_t": 8000.0,
+    "storage_capacity_t": 9150.0,
     "berth_count": 1,
     "site_name": "Naturgassparken (Northern Lights Carbon Capture Plant Site)"
   },

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from .network import PhysicalNetwork
 ROOT = Path(__file__).resolve().parents[2]
 NORTHERN_LIGHTS_PHASE1_DATA_PATH = ROOT / "data" / "northern_lights_phase1_demo.json"
 NORTHERN_LIGHTS_PHASE1_PLUS_YARA_DATA_PATH = ROOT / "data" / "northern_lights_phase1_plus_yara_2026.json"
+PHASE1_PLUS_YARA_HOURLY_CAPTURE_PROFILE_PATH = ROOT / "data" / "phase1plus_emitters_capture_rate_profile_hourly.csv"
 NORTHERN_LIGHTS_PHASE2_DATA_PATH = ROOT / "data" / "northern_lights_phase2_scenario.json"
 
 
@@ -34,13 +36,28 @@ def _load_phase1_plus_yara_data() -> dict:
         return json.load(handle)
 
 
+def _load_hourly_capture_profiles(path: Path) -> dict[str, tuple[float, ...]]:
+    with path.open(encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    if not rows:
+        return {}
+    profile_columns = {
+        column.removesuffix("_capture_tph"): column
+        for column in rows[0]
+        if column.endswith("_capture_tph") and column != "total_capture_tph"
+    }
+    return {
+        entity_id: tuple(float(row[column]) for row in rows)
+        for entity_id, column in profile_columns.items()
+    }
+
+
 def _coordinate(values: list[float]) -> tuple[float, float]:
     return (float(values[0]), float(values[1]))
 
 
 PHASE1_DATA = _load_phase1_data()
 PHASE1_ANNUAL_TARGET_EXPORT_TPY = float(PHASE1_DATA["phase1_annual_target_export_tpy"])
-PHASE1_NOMINAL_CAPTURE_TPH = PHASE1_ANNUAL_TARGET_EXPORT_TPY / 8760.0
 PHASE1_PIPELINE_ANNUAL_CAPACITY_TPY = float(PHASE1_DATA["pipeline_annual_capacity_tpy"])
 PHASE1_PIPELINE_MAX_FLOW_TPH = PHASE1_PIPELINE_ANNUAL_CAPACITY_TPY / 8760.0
 NATURGASSPARKEN = _coordinate(PHASE1_DATA["locations"]["naturgassparken"])
@@ -66,14 +83,15 @@ def build_northern_lights_phase1_demo() -> tuple[PhysicalNetwork, PhysicalState]
 
     network = PhysicalNetwork(time_step_hours=float(PHASE1_DATA["time_step_hours"]))
     for emitter in PHASE1_DATA["emitters"]:
+        annual_target_export_tpy = float(emitter.get("annual_target_export_tpy", PHASE1_ANNUAL_TARGET_EXPORT_TPY))
         network.add_entity(
             Emitter(
                 emitter["entity_id"],
-                nominal_capture_tph=PHASE1_NOMINAL_CAPTURE_TPH,
+                nominal_capture_tph=annual_target_export_tpy / 8760.0,
                 buffer_capacity_t=float(emitter["buffer_capacity_t"]),
                 min_utilization=float(emitter["min_utilization"]),
                 loading_rate_tph=float(emitter["loading_rate_tph"]),
-                annual_target_export_tpy=PHASE1_ANNUAL_TARGET_EXPORT_TPY,
+                annual_target_export_tpy=annual_target_export_tpy,
                 max_production_tph=float(emitter["max_production_tph"]),
                 reference_name=emitter["reference_name"],
             )
@@ -187,11 +205,18 @@ def build_northern_lights_phase2_demo() -> tuple[PhysicalNetwork, PhysicalState]
 def build_northern_lights_phase1_plus_yara_demo() -> tuple[PhysicalNetwork, PhysicalState]:
     """Commercial ramp-up scenario with Brevik, Celsio, Yara, and four Phase 1 ships."""
 
-    return _build_network_from_scenario_data(_load_phase1_plus_yara_data())
+    return _build_network_from_scenario_data(
+        _load_phase1_plus_yara_data(),
+        hourly_capture_profiles=_load_hourly_capture_profiles(PHASE1_PLUS_YARA_HOURLY_CAPTURE_PROFILE_PATH),
+    )
 
 
-def _build_network_from_scenario_data(data: dict) -> tuple[PhysicalNetwork, PhysicalState]:
+def _build_network_from_scenario_data(
+    data: dict,
+    hourly_capture_profiles: dict[str, tuple[float, ...]] | None = None,
+) -> tuple[PhysicalNetwork, PhysicalState]:
     network = PhysicalNetwork(time_step_hours=float(data["time_step_hours"]))
+    hourly_capture_profiles = hourly_capture_profiles or {}
 
     for emitter in data["emitters"]:
         annual_target_export_tpy = float(emitter["annual_target_export_tpy"])
@@ -205,6 +230,7 @@ def _build_network_from_scenario_data(data: dict) -> tuple[PhysicalNetwork, Phys
                 annual_target_export_tpy=annual_target_export_tpy,
                 max_production_tph=float(emitter["max_production_tph"]),
                 reference_name=emitter["reference_name"],
+                hourly_capture_profile_tph=hourly_capture_profiles.get(emitter["entity_id"]),
             )
         )
 
