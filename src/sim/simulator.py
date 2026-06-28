@@ -50,7 +50,7 @@ class PhysicalSimulator:
         self.vessel_states = self._initial_vessel_states()
         self.state.vessel_berths = self._vessel_berths_from_states()
 
-    def step(self, action_frame: ActionFrame) -> SimulationStepRecord:
+    def step(self, action_frame: ActionFrame, compute_observation: bool = True) -> SimulationStepRecord:
         committed = self.resolver.resolve(action_frame)
         self._start_vessel_voyages(committed.actions)
         self.state.vessel_berths = self._vessel_berths_from_states()
@@ -58,11 +58,16 @@ class PhysicalSimulator:
         self.state = result.state
         self._advance_vessel_voyages(self.network.time_step_hours)
         self.state.vessel_berths = self._vessel_berths_from_states()
+        # The full network snapshot recomputes the line-source bottomhole-pressure
+        # model (CoolProp + O(t^2) rate history), which is needed for dashboards but
+        # not for RL, whose observation is built separately. Skipping it in the
+        # training loop speeds each step up by ~10-50x.
+        observation = self.network.snapshot(self.state) if compute_observation else {}
         return SimulationStepRecord(
             action_frame=action_frame,
             committed_action_frame=committed,
             step_result=result,
-            observation=self.network.snapshot(self.state),
+            observation=observation,
             vessel_positions=self.vessel_positions(),
         )
 

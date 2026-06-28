@@ -58,6 +58,11 @@ class CCSEnvConfig:
     storage_target_rate: float = 0.9
     reward_scale: float = 1e-3
     default_speed_knots: float = 12.0
+    # Goal mode: if set, the episode genuinely terminates once this many tonnes
+    # have been safely stored. This turns the episode into an iso-storage task -
+    # "store T tonnes, how long and at what cost?" - and makes goal-reaching a
+    # true `terminated` (not a time-limit truncation). episode_hours is the cap.
+    storage_goal_t: float | None = None
 
 
 class CCSEnv:
@@ -160,7 +165,9 @@ class CCSEnv:
         hours = self.network.time_step_hours
         current_time = self.simulator.state.time_h
         proposals = self._build_proposals(action)
-        record = self.simulator.step(ActionFrame(time_h=current_time, proposals=proposals))
+        record = self.simulator.step(
+            ActionFrame(time_h=current_time, proposals=proposals), compute_observation=False
+        )
         step_result = record.step_result
 
         economics = self.cost_model.evaluate_step(self.network, step_result)
@@ -190,12 +197,13 @@ class CCSEnv:
         reward = (economics.net - backlog_penalty) * self.config.reward_scale
 
         self.t += 1
-        # The CCS operation never truly "ends" - reaching the horizon is a time
-        # limit (truncation), not a terminal state. Keeping terminated=False tells
-        # the RL trainer to bootstrap V(s_T): the value of the leftover backlog /
-        # reservoir state is carried into the future instead of being zeroed out.
-        terminated = False
-        truncated = self.t >= self.n_steps
+        # Without a goal the operation never truly "ends" - reaching the horizon is
+        # a time limit (truncation), not a terminal state, so terminated stays False
+        # and the trainer bootstraps V(s_T). In goal mode, storing the target amount
+        # IS a genuine terminal (the task is done), so terminated becomes True.
+        goal = self.config.storage_goal_t
+        terminated = goal is not None and self.cumulative_stored_t >= goal
+        truncated = (not terminated) and self.t >= self.n_steps
         if not (terminated or truncated):
             self._apply_disturbances()
 

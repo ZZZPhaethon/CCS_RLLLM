@@ -79,6 +79,43 @@ class RunEpisodeTests(unittest.TestCase):
         self.assertLess(shuttle.backlog_growth_t, idle.backlog_growth_t)
 
 
+class GoalModeTests(unittest.TestCase):
+    def _goal_env(self, goal_t: float, cap_hours: int = 336):
+        return CCSEnv(
+            _network(),
+            _LOCATIONS,
+            scenario_generator=ScenarioGenerator(config=ScenarioConfig(episode_hours=cap_hours)),
+            config=CCSEnvConfig(episode_hours=cap_hours, storage_goal_t=goal_t),
+        )
+
+    def test_reaching_goal_terminates_before_cap(self):
+        env = self._goal_env(goal_t=2_000.0, cap_hours=336)
+        m = run_episode(env, greedy_shuttle_policy, seed=1)
+        self.assertTrue(m.reached_target)
+        self.assertGreaterEqual(m.stored_t, 2_000.0)
+        self.assertLess(m.elapsed_hours, 336)  # finished early
+
+    def test_unreachable_goal_runs_to_cap_without_terminating(self):
+        env = self._goal_env(goal_t=1e12, cap_hours=72)
+        m = run_episode(env, greedy_shuttle_policy, seed=1)
+        self.assertFalse(m.reached_target)
+        self.assertEqual(m.elapsed_hours, 72)
+
+    def test_idle_never_reaches_goal(self):
+        env = self._goal_env(goal_t=5_000.0, cap_hours=72)
+        m = run_episode(env, idle_policy, seed=1)
+        self.assertFalse(m.reached_target)
+
+    def test_goal_reached_is_a_true_termination(self):
+        env = self._goal_env(goal_t=2_000.0, cap_hours=336)
+        env.reset(seed=1)
+        terminated = truncated = False
+        while not (terminated or truncated):
+            _o, _r, terminated, truncated, _i = env.step(greedy_shuttle_policy(env))
+        self.assertTrue(terminated)     # goal met -> genuine terminal
+        self.assertFalse(truncated)
+
+
 class AggregateTests(unittest.TestCase):
     def test_evaluate_returns_per_episode_and_summary(self):
         episodes, summary = evaluate(_env(), greedy_shuttle_policy, seeds=[1, 2, 3])

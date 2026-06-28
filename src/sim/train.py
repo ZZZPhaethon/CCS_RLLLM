@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 
+from .economics import CostModel, EconomicParameters
 from .env import CCSEnvConfig
 from .env_scenarios import build_phase1_plus_yara_env
 from .gym_env import CCSGymEnv, make_ppo_policy
@@ -25,12 +26,20 @@ def make_native_env(
     episode_hours: int = 168,
     storage_target_rate: float = 0.9,
     warm_start: bool = True,
+    backlog_penalty: float = 20.0,
 ):
-    """A native CCSEnv on the real Phase 1 + Yara network configured for RL."""
+    """A native CCSEnv on the real Phase 1 + Yara network configured for RL.
+
+    ``backlog_penalty`` (EUR/t of backlog growth) is the "keep up with capture"
+    weight: raising it makes the storage obligation harder, pushing the policy to
+    ship and inject more aggressively at the cost of worse pure economics.
+    """
+    cost_model = CostModel(EconomicParameters(backlog_penalty_eur_per_t=backlog_penalty))
     return build_phase1_plus_yara_env(
         scenario_generator=ScenarioGenerator(
             config=ScenarioConfig(episode_hours=episode_hours, warm_start=warm_start)
         ),
+        cost_model=cost_model,
         config=CCSEnvConfig(episode_hours=episode_hours, storage_target_rate=storage_target_rate),
     )
 
@@ -41,11 +50,16 @@ def train_ppo(
     gamma: float = 0.999,
     episode_hours: int = 168,
     warm_start: bool = True,
+    backlog_penalty: float = 20.0,
     verbose: int = 1,
 ):
     from sb3_contrib import MaskablePPO
 
-    gym_env = CCSGymEnv(make_native_env(episode_hours=episode_hours, warm_start=warm_start))
+    gym_env = CCSGymEnv(
+        make_native_env(
+            episode_hours=episode_hours, warm_start=warm_start, backlog_penalty=backlog_penalty
+        )
+    )
     model = MaskablePPO(
         "MlpPolicy",
         gym_env,
