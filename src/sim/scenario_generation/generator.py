@@ -38,17 +38,18 @@ class ScenarioConfig:
     episode_hours: int = 168
     time_step_hours: float = 1.0
 
-    # Capture-plant availability: multiplicative noise + occasional trips.
-    capture_noise_std: float = 0.04
+    # Capture-plant multiplier: bounded profile jitter + occasional trips.
+    # Historical field name retained; interpreted as +/- fractional half-width.
+    capture_noise_std: float = 0.10
     capture_outage_rate_per_week: float = 0.5
-    capture_outage_mean_hours: float = 6.0
+    capture_outage_mean_hours: float = 12.0
 
     # Weather -> vessel speed (Markov chain above). Disable by setting False.
     enable_weather: bool = True
 
     # Injection-well maintenance windows.
     well_maintenance_rate_per_week: float = 0.3
-    well_maintenance_mean_hours: float = 24.0
+    well_maintenance_mean_hours: float = 12.0
 
     # Injectivity decline over the episode (time proxy for cumulative injection).
     injectivity_max_decline: float = 0.15
@@ -61,8 +62,8 @@ class ScenarioConfig:
 
     # Initial-condition randomization (fraction-of-capacity ranges).
     randomize_initial_inventory: bool = True
-    emitter_initial_fill_range: tuple[float, float] = (0.0, 0.4)
-    terminal_initial_fill_range: tuple[float, float] = (0.0, 0.3)
+    emitter_initial_fill_range: tuple[float, float] = (0.0, 0.5)
+    terminal_initial_fill_range: tuple[float, float] = (0.0, 0.5)
 
     # Warm-start randomization of the *slow* variables (reservoir pressure and
     # injectivity). Off by default. Turning it on lets short episodes start from
@@ -246,8 +247,11 @@ def _capture_availability_series(rng, n_steps: int, dt: float, config: ScenarioC
         if is_out:
             series.append(0.0)
             continue
-        noisy = rng.gauss(1.0, config.capture_noise_std) if config.capture_noise_std > 0.0 else 1.0
-        series.append(_clamp(noisy, 0.0, 1.0))
+        if config.capture_noise_std > 0.0:
+            noisy = rng.uniform(1.0 - config.capture_noise_std, 1.0 + config.capture_noise_std)
+        else:
+            noisy = 1.0
+        series.append(max(0.0, noisy))
     return series
 
 

@@ -40,14 +40,14 @@ class DisturbanceResolverTests(unittest.TestCase):
         well = InjectionWell("w", max_injection_tph=200.0)
         terminal = Terminal("t", storage_capacity_t=1_000.0, berth_count=2)
         state = PhysicalState(
-            emitter_availability={"e": 1.5},  # clamped to 1.0
+            emitter_availability={"e": 1.5},  # capture multipliers can exceed 1.0
             well_available={"w": False},
             injectivity_factor={"w": -0.5},  # clamped to 0.0
             vessel_speed_factor={"ship": 0.25},
             berth_count_override={"t": 0},
         )
 
-        self.assertEqual(emitter_availability(state, emitter), 1.0)
+        self.assertEqual(emitter_availability(state, emitter), 1.5)
         self.assertFalse(well_is_available(state, well))
         self.assertEqual(well_injectivity_factor(state, well), 0.0)
         self.assertEqual(well_max_injection_tph(state, well), 0.0)
@@ -69,6 +69,15 @@ class DisturbancePhysicsTests(unittest.TestCase):
 
         self.assertAlmostEqual(result.state.entity_inventory_t["brevik"], 40.0)
         self.assertAlmostEqual(result.state.last_capture_tph["brevik"], 40.0)
+
+    def test_emitter_capture_multiplier_can_raise_capture_above_profile(self):
+        network = self._capture_network()
+        state = PhysicalState(emitter_availability={"brevik": 1.1})
+
+        result = network.step(state)
+
+        self.assertAlmostEqual(result.state.entity_inventory_t["brevik"], 110.0)
+        self.assertAlmostEqual(result.state.last_capture_tph["brevik"], 110.0)
 
     def _injection_network(self) -> PhysicalNetwork:
         network = PhysicalNetwork(time_step_hours=1.0)

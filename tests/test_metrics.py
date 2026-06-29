@@ -12,11 +12,16 @@ from sim.scenario_generation import ScenarioConfig, ScenarioGenerator
 from tests.fixtures.toy_networks import TOY_TWO_SOURCE_LOCATIONS, make_toy_two_source_network
 
 
-def _env(episode_hours: int = 48, **config) -> CCSEnv:
+def _env(
+    episode_hours: int = 48,
+    scenario_config: ScenarioConfig | None = None,
+    **config,
+) -> CCSEnv:
+    scenario_config = scenario_config or ScenarioConfig(episode_hours=episode_hours)
     return CCSEnv(
         make_toy_two_source_network(),
         TOY_TWO_SOURCE_LOCATIONS,
-        scenario_generator=ScenarioGenerator(config=ScenarioConfig(episode_hours=episode_hours)),
+        scenario_generator=ScenarioGenerator(config=scenario_config),
         config=CCSEnvConfig(episode_hours=episode_hours, **config),
     )
 
@@ -67,7 +72,13 @@ class RunEpisodeTests(unittest.TestCase):
     def test_idle_accumulates_backlog_without_losing_co2(self):
         # Idling stores nothing, so captured CO2 piles up in buffers but is not lost
         # in a short episode (loss rate ~ 0): the new signal, not a contractual miss.
-        m = run_episode(_env(), idle_policy, seed=6)
+        quiet = ScenarioConfig(
+            episode_hours=48,
+            capture_noise_std=0.0,
+            capture_outage_rate_per_week=0.0,
+            randomize_initial_inventory=False,
+        )
+        m = run_episode(_env(scenario_config=quiet), idle_policy, seed=6)
         self.assertGreater(m.backlog_growth_t, 0.0)
         self.assertEqual(m.loss_rate, 0.0)
         self.assertGreater(m.backlog_penalty, 0.0)

@@ -19,9 +19,9 @@ from ..entities.terminal import Terminal
 
 
 def emitter_availability(state: PhysicalState, emitter: Emitter) -> float:
-    """Capture availability factor in ``[0, 1]`` for an emitter."""
+    """Capture multiplier for an emitter; values above 1 model over-profile output."""
     value = state.emitter_availability.get(emitter.entity_id, emitter.availability)
-    return max(0.0, min(1.0, value))
+    return max(0.0, value)
 
 
 def well_is_available(state: PhysicalState, well: InjectionWell) -> bool:

@@ -86,13 +86,26 @@ class ScenarioGeneratorTests(unittest.TestCase):
         network = _network()
         scenario = ScenarioGenerator(seed=11).sample(network)
         for series in scenario.emitter_availability.values():
-            self.assertTrue(all(0.0 <= v <= 1.0 for v in series))
+            self.assertTrue(all(0.0 <= v <= 1.1 for v in series))
         for series in scenario.injectivity_factor.values():
             self.assertTrue(all(0.3 <= v <= 1.0 for v in series))
         for series in scenario.vessel_speed_factor.values():
             self.assertTrue(all(0.0 < v <= 1.0 for v in series))
         for series in scenario.berth_count_override.values():
             self.assertTrue(all(0 <= b <= 2 for b in series))
+
+    def test_capture_noise_fluctuates_around_profile_by_default(self):
+        network = _network()
+        config = _quiet_config(capture_noise_std=0.1)
+        scenario = ScenarioGenerator(config=config, seed=11).sample(network)
+        values = [
+            value
+            for series in scenario.emitter_availability.values()
+            for value in series
+        ]
+        self.assertTrue(all(0.9 <= value <= 1.1 for value in values))
+        self.assertTrue(any(value > 1.0 for value in values))
+        self.assertTrue(any(value < 1.0 for value in values))
 
     def test_randomized_initial_inventory_respects_capacity_fractions(self):
         network = _network()
@@ -104,6 +117,17 @@ class ScenarioGeneratorTests(unittest.TestCase):
         scenario = ScenarioGenerator(config=config, seed=9).sample(network)
         self.assertTrue(100.0 <= scenario.initial_inventory_t["brevik"] <= 200.0)
         self.assertTrue(100.0 <= scenario.initial_inventory_t["oygarden"] <= 200.0)
+
+    def test_default_initial_inventory_ranges_allow_half_full_starts(self):
+        config = ScenarioConfig()
+        self.assertEqual(config.emitter_initial_fill_range, (0.0, 0.5))
+        self.assertEqual(config.terminal_initial_fill_range, (0.0, 0.5))
+
+    def test_default_outage_durations_are_twelve_hours(self):
+        config = ScenarioConfig()
+        self.assertEqual(config.capture_outage_mean_hours, 12.0)
+        self.assertEqual(config.well_maintenance_mean_hours, 12.0)
+        self.assertEqual(config.berth_outage_mean_hours, 12.0)
 
 
 class WarmStartTests(unittest.TestCase):
