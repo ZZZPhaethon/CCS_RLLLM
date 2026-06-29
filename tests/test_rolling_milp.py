@@ -3,13 +3,13 @@ import unittest
 try:
     import pulp  # noqa: F401
 
-    from sim.control.milp import solve_min_makespan
-    from sim.control.rolling_milp import RollingMilpController
     HAVE_PULP = True
 except ImportError:
     HAVE_PULP = False
 
 from sim.control.baselines import greedy_shuttle_policy
+from sim.control.milp import solve_min_makespan
+from sim.control.rolling_milp import RollingMilpController
 from sim.environment import CCSEnv, CCSEnvConfig
 from sim.metrics import run_episode
 from sim.scenario_generation import ScenarioConfig, ScenarioGenerator
@@ -27,6 +27,19 @@ def _cold_env(goal_t: float, cap_hours: int = 600) -> CCSEnv:
         ),
         config=CCSEnvConfig(episode_hours=cap_hours, storage_goal_t=goal_t),
     )
+
+
+class RollingMilpInterfaceTests(unittest.TestCase):
+    def test_controller_accepts_progress_and_plan_target_options(self):
+        messages: list[str] = []
+        progress = messages.append
+        controller = RollingMilpController(
+            _cold_env(goal_t=1_600.0),
+            progress=progress,
+            plan_target_t=800.0,
+        )
+        self.assertEqual(controller.plan_target_t, 800.0)
+        self.assertIs(controller.progress, progress)
 
 
 @unittest.skipUnless(HAVE_PULP, "pulp/CBC not installed")
@@ -58,6 +71,13 @@ class RollingMilpTests(unittest.TestCase):
         bound = solve_min_makespan(env, target_t=1_600.0).makespan_h
         metrics = run_episode(env, RollingMilpController(env, replan_every=12), seed=1)
         self.assertGreaterEqual(metrics.elapsed_hours + 1e-6, bound)
+
+    def test_controller_uses_plan_target_when_storage_goal_is_unset(self):
+        env = _cold_env(goal_t=None)
+        env.reset(seed=1)
+        controller = RollingMilpController(env, replan_every=12, plan_target_t=800.0)
+        action = controller.policy(env)
+        self.assertEqual(len(action), len(env.vessel_ids) + len(env.well_ids))
 
 
 if __name__ == "__main__":

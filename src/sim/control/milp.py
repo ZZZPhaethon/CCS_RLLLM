@@ -64,6 +64,17 @@ class MilpResult:
     schedule: dict[str, list[int]]  # vessel_id -> delivery completion hours
 
 
+@dataclass
+class FixedHorizonMilpResult:
+    status: str
+    horizon_h: int
+    stored_t: float
+    deliveries: int
+    operating_cost: float
+    cost_per_stored_t: float
+    schedule: dict[str, list[int]]
+
+
 def extract_params(env) -> tuple[list[VesselParams], float, float, float]:
     """Pull MILP parameters from a CCSEnv (injection cap, capture rate, term cap)."""
     network = env.network
@@ -197,6 +208,87 @@ def solve_min_makespan(
         operating_cost=cost,
         cost_per_stored_t=cost / target_t if target_t > 0 else float("nan"),
         target_t=target_t,
+        schedule=schedule,
+    )
+
+
+def solve_max_storage_fixed_horizon(
+    env,
+    horizon_h: int,
+    economics: EconomicParameters | None = None,
+    initial_buffer_t: float = 0.0,
+    time_limit_s: float | None = None,
+    msg: bool = False,
+) -> FixedHorizonMilpResult:
+    """Maximum safely stored CO2 over a fixed nominal horizon."""
+    import pulp
+
+    params = economics or EconomicParameters()
+    vessels, inj_cap, capture_rate, term_cap = extract_params(env)
+    source_rates = _extract_source_rates(env)
+    H = int(horizon_h)
+    hours = range(H)
+
+    prob = pulp.LpProblem("max_storage_fixed_horizon", pulp.LpMaximize)
+    d = {
+        (v.vessel_id, t): pulp.LpVariable(f"d_{v.vessel_id}_{t}", cat="Binary")
+        for v in vessels
+        for t in hours
+    }
+    inj = {t: pulp.LpVariable(f"inj_{t}", lowBound=0, upBound=inj_cap) for t in hours}
+
+    for v in vessels:
+        for t in hours:
+            if t < v.startup_h:
+                prob += d[(v.vessel_id, t)] == 0
+
+        for t in hours:
+            window = [d[(v.vessel_id, k)] for k in range(t, min(t + v.round_trip_h, H))]
+            prob += pulp.lpSum(window) <= 1
+
+    unload_dur = max(v.unload_dur_h for v in vessels)
+    for t in hours:
+        window = [d[(v.vessel_id, k)] for v in vessels for k in range(t, min(t + unload_dur, H))]
+        prob += pulp.lpSum(window) <= 1
+
+    for source_id, capture_tph in source_rates.items():
+        source_vessels = [v for v in vessels if v.source_id == source_id]
+        if not source_vessels:
+            continue
+        for t in hours:
+            loaded_by_t = [
+                v.capacity_t * d[(v.vessel_id, k)]
+                for v in source_vessels
+                for k in hours
+                if k - v.sail_h <= t
+            ]
+            prob += pulp.lpSum(loaded_by_t) <= capture_tph * t
+
+    for t in hours:
+        cum_deliv = pulp.lpSum(v.capacity_t * d[(v.vessel_id, k)] for v in vessels for k in range(t + 1))
+        cum_inj = pulp.lpSum(inj[k] for k in range(t + 1))
+        prob += cum_inj <= cum_deliv
+        prob += cum_deliv - cum_inj <= term_cap
+        prob += cum_deliv <= initial_buffer_t + capture_rate * (t + 1)
+
+    prob += pulp.lpSum(inj.values()) - 1e-4 * pulp.lpSum(d.values())
+    prob.solve(pulp.PULP_CBC_CMD(msg=1 if msg else 0, timeLimit=time_limit_s))
+
+    status = pulp.LpStatus[prob.status]
+    schedule = {
+        v.vessel_id: [t for t in hours if round(d[(v.vessel_id, t)].value() or 0) == 1]
+        for v in vessels
+    }
+    n_deliveries = sum(len(s) for s in schedule.values())
+    stored_t = float(sum(inj[t].value() or 0.0 for t in hours))
+    cost = _schedule_cost(vessels, schedule, float(H), stored_t, params)
+    return FixedHorizonMilpResult(
+        status=status,
+        horizon_h=H,
+        stored_t=stored_t,
+        deliveries=n_deliveries,
+        operating_cost=cost,
+        cost_per_stored_t=cost / stored_t if stored_t > 0 else float("nan"),
         schedule=schedule,
     )
 

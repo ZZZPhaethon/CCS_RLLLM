@@ -3,11 +3,13 @@ import unittest
 try:
     import pulp  # noqa: F401
 
-    from sim.control.milp import extract_params, solve_min_makespan
     HAVE_PULP = True
 except ImportError:
     HAVE_PULP = False
 
+from sim import control
+from sim.control import milp as milp_module
+from sim.control.milp import extract_params, solve_min_makespan
 from sim.environment import CCSEnv, CCSEnvConfig
 from sim.entities import Emitter, InjectionWell, Pipeline, Reservoir, SubseaManifold, Terminal, Vessel
 from sim.network import PhysicalNetwork
@@ -55,6 +57,12 @@ def _unbalanced_source_env() -> CCSEnv:
     )
 
 
+class MilpExportTests(unittest.TestCase):
+    def test_fixed_horizon_solver_is_exported(self):
+        self.assertTrue(hasattr(milp_module, "solve_max_storage_fixed_horizon"))
+        self.assertTrue(hasattr(control, "solve_max_storage_fixed_horizon"))
+
+
 @unittest.skipUnless(HAVE_PULP, "pulp/CBC not installed")
 class MilpTests(unittest.TestCase):
     def test_extract_params_from_network(self):
@@ -94,6 +102,21 @@ class MilpTests(unittest.TestCase):
         self.assertEqual(result.status, "Optimal")
         self.assertEqual(result.schedule["short_ship"], [])
         self.assertEqual(result.schedule["long_ship"], [60])
+
+    def test_fixed_horizon_maximizes_storage(self):
+        result = milp_module.solve_max_storage_fixed_horizon(_env(), horizon_h=168)
+        self.assertEqual(result.status, "Optimal")
+        self.assertEqual(result.horizon_h, 168)
+        self.assertGreater(result.stored_t, 0.0)
+        self.assertGreater(result.deliveries, 0)
+        self.assertGreater(result.operating_cost, 0.0)
+
+    def test_fixed_horizon_cannot_borrow_capture_from_other_emitters(self):
+        result = milp_module.solve_max_storage_fixed_horizon(_unbalanced_source_env(), horizon_h=120)
+        self.assertEqual(result.status, "Optimal")
+        self.assertEqual(result.schedule["short_ship"], [])
+        self.assertEqual(len(result.schedule["long_ship"]), 1)
+        self.assertAlmostEqual(result.stored_t, 1_000.0)
 
 
 if __name__ == "__main__":

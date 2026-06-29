@@ -18,6 +18,8 @@ keep the terminal continuously fed without flooding it.
 from __future__ import annotations
 
 import math
+import time
+from typing import Callable
 
 from ..economics import EconomicParameters
 from ..environment import VESSEL_GO_HOME, VESSEL_GO_TERMINAL, VESSEL_WAIT, WELL_ACTIONS, CCSEnv
@@ -41,8 +43,13 @@ def _plan_delivery_times(
     cap = vessels[0].capacity_t
 
     startup_max = max(vessel_ready_h.values())
-    H = int(startup_max + math.ceil(max(0.0, remaining_target_t) / inj_cap)
-            + max(v.round_trip_h for v in vessels) + 20)
+    fleet_rate = sum(v.capacity_t / v.round_trip_h for v in vessels)
+    throughput_hours = max(
+        max(0.0, remaining_target_t) / inj_cap,
+        max(0.0, remaining_target_t - term_init_t - source_buffer_t) / capture_rate,
+        max(0.0, remaining_target_t) / fleet_rate,
+    )
+    H = int(startup_max + math.ceil(throughput_hours) + max(v.round_trip_h for v in vessels) + 20)
     hours = range(H)
 
     prob = pulp.LpProblem("rolling_plan", pulp.LpMinimize)
@@ -84,9 +91,19 @@ def _plan_delivery_times(
 class RollingMilpController:
     """Re-planning MILP controller, usable as a metrics ``policy(env)``."""
 
-    def __init__(self, env: CCSEnv, replan_every: int = 12, economics: EconomicParameters | None = None):
+    def __init__(
+        self,
+        env: CCSEnv,
+        replan_every: int = 12,
+        economics: EconomicParameters | None = None,
+        progress: Callable[[str], None] | None = None,
+        plan_target_t: float | None = None,
+    ):
         self.replan_every = replan_every
         self.economics = economics or EconomicParameters()
+        self.progress = progress
+        self.plan_target_t = plan_target_t
+        self._fallback_greedy = False
         vessels, *_ = extract_params(env)
         self._vp = {v.vessel_id: v for v in vessels}
         self._sail_h = {
@@ -104,6 +121,8 @@ class RollingMilpController:
         new_episode = now < self._plan_origin_h  # time went backwards -> env was reset
         if new_episode or now - self._plan_origin_h >= self.replan_every or not self._plan:
             self._replan(env, now)
+        if self._fallback_greedy:
+            return self._greedy_action(env)
 
         action: list[int] = []
         for i, vid in enumerate(env.vessel_ids):
@@ -112,20 +131,60 @@ class RollingMilpController:
         return action
 
     def _replan(self, env: CCSEnv, now: float) -> None:
-        goal = env.config.storage_goal_t or float("inf")
-        remaining = max(0.0, goal - env.cumulative_stored_t)
+        goal = env.config.storage_goal_t
+        if goal is None:
+            remaining = self.plan_target_t if self.plan_target_t is not None and self.plan_target_t > 0.0 else 10_000.0
+        else:
+            remaining = max(0.0, goal - env.cumulative_stored_t)
         if remaining <= 0.0:
             self._plan = {vid: [] for vid in self._vp}
             self._plan_origin_h = now
+            self._fallback_greedy = False
             return
         state = env.simulator.state
         term_init = sum(state.entity_inventory_t.get(t, 0.0) for t in env.terminal_ids)
         source_buffer = sum(state.entity_inventory_t.get(e, 0.0) for e in env.emitter_ids)
         ready = {vid: self._ready_hours(env, vid) for vid in self._vp}
+        planning_target = (
+            min(remaining, self.plan_target_t)
+            if self.plan_target_t is not None and self.plan_target_t > 0.0
+            else remaining
+        )
+        start = time.perf_counter()
+        if self.progress is not None:
+            self.progress(
+                f"  rolling_milp replan at t={now:.0f} h; remaining={remaining:,.1f} t; "
+                f"planning_target={planning_target:,.1f} t; "
+                f"terminal={term_init:,.1f} t; source_buffer={source_buffer:,.1f} t"
+            )
         self._plan = _plan_delivery_times(
-            env, remaining, ready, term_init, source_buffer, self.economics
+            env, planning_target, ready, term_init, source_buffer, self.economics
         )
         self._plan_origin_h = now
+        planned_deliveries = sum(len(times) for times in self._plan.values())
+        if self.progress is not None:
+            self.progress(
+                f"  rolling_milp plan ready in {time.perf_counter() - start:.1f}s; "
+                f"planned_deliveries={planned_deliveries}"
+            )
+        self._fallback_greedy = planned_deliveries == 0
+        if self._fallback_greedy and self.progress is not None:
+            self.progress("  rolling_milp fallback: no MILP deliveries planned; using greedy shuttle until next replan")
+
+    def _greedy_action(self, env: CCSEnv) -> list[int]:
+        state = env.simulator.state
+        action: list[int] = []
+        for i, vessel_id in enumerate(env.vessel_ids):
+            mask = env.action_mask()[i]
+            cargo = state.entity_inventory_t.get(vessel_id, 0.0)
+            if mask[VESSEL_GO_TERMINAL] and cargo > 1e-9:
+                action.append(VESSEL_GO_TERMINAL)
+            elif mask[VESSEL_GO_HOME] and cargo <= 1e-9:
+                action.append(VESSEL_GO_HOME)
+            else:
+                action.append(VESSEL_WAIT)
+        action += [WELL_ACTIONS - 1] * len(env.well_ids)
+        return action
 
     def _ready_hours(self, env: CCSEnv, vid: str) -> int:
         """Hours from now until this vessel could next complete a delivery."""
