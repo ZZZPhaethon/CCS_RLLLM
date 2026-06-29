@@ -1,11 +1,4 @@
-from __future__ import annotations
+"""Backward-compatible import path for :mod:`sim.physical.entities.terminal`."""
 
-from dataclasses import dataclass
+from ..physical.entities.terminal import *
 
-
-@dataclass(frozen=True)
-class Terminal:
-    entity_id: str
-    storage_capacity_t: float
-    berth_count: int = 1
-    site_name: str | None = None

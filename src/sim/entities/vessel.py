@@ -1,13 +1,4 @@
-from __future__ import annotations
+"""Backward-compatible import path for :mod:`sim.physical.entities.vessel`."""
 
-from dataclasses import dataclass
+from ..physical.entities.vessel import *
 
-
-@dataclass(frozen=True)
-class Vessel:
-    entity_id: str
-    capacity_t: float
-    loading_rate_tph: float
-    unloading_rate_tph: float
-    volume_capacity_m3: float | None = None
-    speed_knots: float | None = None

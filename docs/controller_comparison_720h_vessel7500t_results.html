@@ -1,0 +1,433 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Controller Comparison - 720 h, 7,500 t Vessels</title>
+  <style>
+    :root {
+      --bg: #f5f7fb;
+      --panel: #ffffff;
+      --ink: #17202a;
+      --muted: #667085;
+      --line: #d8dee8;
+      --accent: #0f766e;
+      --accent-soft: #ccfbf1;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, Segoe UI, Arial, sans-serif;
+      color: var(--ink);
+      background: var(--bg);
+    }
+    header {
+      padding: 28px 32px 18px;
+      background: var(--panel);
+      border-bottom: 1px solid var(--line);
+    }
+    h1 { margin: 0 0 6px; font-size: 24px; }
+    p { color: var(--muted); line-height: 1.5; }
+    main { max-width: 1200px; margin: 0 auto; padding: 24px 28px 48px; }
+    .cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+    .card, .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+    }
+    .card span, .card small { display: block; color: var(--muted); }
+    .card strong { display: block; margin: 8px 0; font-size: 24px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 18px; }
+    .panel { margin-top: 18px; overflow-x: auto; }
+    h2 { margin: 0 0 12px; font-size: 18px; }
+    h3 { margin: 16px 0 10px; font-size: 14px; color: var(--muted); }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; padding: 10px 9px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+    th { color: var(--muted); font-weight: 700; }
+    .bar-row {
+      display: grid;
+      grid-template-columns: 130px minmax(180px, 1fr) 120px;
+      gap: 10px;
+      align-items: center;
+      margin: 10px 0;
+      font-size: 13px;
+    }
+    .bar-label { font-weight: 700; }
+    .bar-track { height: 12px; background: #eef2f7; border-radius: 999px; overflow: hidden; }
+    .bar-fill { height: 100%; background: var(--accent); }
+    .bar-value { color: var(--muted); text-align: right; }
+    .links a {
+      display: inline-block;
+      margin: 6px 10px 0 0;
+      padding: 8px 10px;
+      border-radius: 6px;
+      background: var(--accent-soft);
+      color: #115e59;
+      text-decoration: none;
+      font-weight: 700;
+      font-size: 13px;
+    }
+    @media (max-width: 860px) {
+      .cards, .grid { grid-template-columns: 1fr; }
+      main { padding: 18px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Controller Comparison - 720 h, 7,500 t Vessels</h1>
+    <p>Fixed-horizon comparison over 720 h with 7,500 t vessels. Episode controllers use identical disturbance trajectories for each seed. Static MILP is a nominal perfect-information benchmark.</p>
+  </header>
+  <main>
+    <section class="cards">
+      
+        <section class="card">
+          <span>Best episode stored</span>
+          <strong>72,167.6 t</strong>
+          <small>rolling_milp</small>
+        </section>
+        
+
+        <section class="card">
+          <span>Lowest episode venting</span>
+          <strong>421.3 t</strong>
+          <small>rolling_milp</small>
+        </section>
+        
+
+        <section class="card">
+          <span>Best episode EUR/t</span>
+          <strong>EUR 38.62/t</strong>
+          <small>rolling_milp</small>
+        </section>
+        
+
+        <section class="card">
+          <span>Nominal MILP upper bound</span>
+          <strong>97,500.0 t</strong>
+          <small>static_milp</small>
+        </section>
+        
+
+        <section class="card">
+          <span>Greedy stored</span>
+          <strong>13,898.6 t</strong>
+          <small>greedy_shuttle</small>
+        </section>
+        
+
+        <section class="card">
+          <span>Greedy venting</span>
+          <strong>52,723.9 t</strong>
+          <small>greedy_shuttle</small>
+        </section>
+        
+    </section>
+
+    <section class="panel">
+      <h2>Static MILP Benchmark</h2>
+      <p>Nominal fixed-horizon MILP stores <strong>97,500.0 t</strong> in 720 h with 13 deliveries, operating cost EUR 3,012,000, and cost EUR 30.89/t.</p>
+    </section>
+
+    <section class="grid">
+      <div class="panel">
+        <h2>Throughput</h2>
+        <h3>Mean stored CO2</h3>
+            <div class="bar-row">
+              <div class="bar-label">greedy_shuttle</div>
+              <div class="bar-track"><div class="bar-fill" style="width:19.3%"></div></div>
+              <div class="bar-value">13,898.6 t</div>
+            </div>
+            
+
+            <div class="bar-row">
+              <div class="bar-label">idle</div>
+              <div class="bar-track"><div class="bar-fill" style="width:1.0%"></div></div>
+              <div class="bar-value">0.0 t</div>
+            </div>
+            
+
+            <div class="bar-row">
+              <div class="bar-label">rolling_milp</div>
+              <div class="bar-track"><div class="bar-fill" style="width:100.0%"></div></div>
+              <div class="bar-value">72,167.6 t</div>
+            </div>
+            
+      </div>
+      <div class="panel">
+        <h2>Losses And Cost</h2>
+        <h3>Mean vented CO2</h3>
+            <div class="bar-row">
+              <div class="bar-label">greedy_shuttle</div>
+              <div class="bar-track"><div class="bar-fill" style="width:100.0%"></div></div>
+              <div class="bar-value">52,723.9 t</div>
+            </div>
+            
+
+            <div class="bar-row">
+              <div class="bar-label">idle</div>
+              <div class="bar-track"><div class="bar-fill" style="width:99.1%"></div></div>
+              <div class="bar-value">52,262.6 t</div>
+            </div>
+            
+
+            <div class="bar-row">
+              <div class="bar-label">rolling_milp</div>
+              <div class="bar-track"><div class="bar-fill" style="width:1.0%"></div></div>
+              <div class="bar-value">421.3 t</div>
+            </div>
+            
+        <h3>Mean cost per stored tonne</h3>
+            <div class="bar-row">
+              <div class="bar-label">greedy_shuttle</div>
+              <div class="bar-track"><div class="bar-fill" style="width:100.0%"></div></div>
+              <div class="bar-value">EUR 155.46/t</div>
+            </div>
+            
+
+            <div class="bar-row">
+              <div class="bar-label">idle</div>
+              <div class="bar-track"><div class="bar-fill" style="width:1.0%"></div></div>
+              <div class="bar-value">n/a</div>
+            </div>
+            
+
+            <div class="bar-row">
+              <div class="bar-label">rolling_milp</div>
+              <div class="bar-track"><div class="bar-fill" style="width:24.8%"></div></div>
+              <div class="bar-value">EUR 38.62/t</div>
+            </div>
+            
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Controller Summary</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Controller</th><th>Episodes</th><th>Stored mean</th><th>Vented mean</th><th>Storage rate</th><th>Operating cost</th><th>Cost/t</th>
+          </tr>
+        </thead>
+        <tbody>
+            <tr>
+              <td>greedy_shuttle</td>
+              <td>5</td>
+              <td>13,898.6 t</td>
+              <td>52,723.9 t</td>
+              <td>14.3%</td>
+              <td>EUR 2,159,629</td>
+              <td>EUR 155.46/t</td>
+            </tr>
+            
+
+            <tr>
+              <td>idle</td>
+              <td>5</td>
+              <td>0.0 t</td>
+              <td>52,262.6 t</td>
+              <td>0.0%</td>
+              <td>EUR 1,162,500</td>
+              <td>n/a</td>
+            </tr>
+            
+
+            <tr>
+              <td>rolling_milp</td>
+              <td>5</td>
+              <td>72,167.6 t</td>
+              <td>421.3 t</td>
+              <td>74.2%</td>
+              <td>EUR 2,783,555</td>
+              <td>EUR 38.62/t</td>
+            </tr>
+            </tbody>
+      </table>
+    </section>
+
+    <section class="panel links">
+      <h2>Dispatch Dashboards</h2>
+      <p>Open these to inspect hour-by-hour vessel movements, terminal inventory, injection, and action logs.</p>
+      <a href="controller_greedy_shuttle_720h_dashboard.html">Greedy Shuttle Dashboard</a>
+      <a href="controller_rolling_milp_720h_dashboard.html">Rolling MILP Dashboard</a>
+    </section>
+
+    <section class="panel">
+      <h2>Per-Seed Results</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Seed</th><th>Controller</th><th>Scenario signature</th><th>Stored</th><th>Vented</th><th>Operating cost</th><th>Cost/t</th>
+          </tr>
+        </thead>
+        <tbody>
+            <tr>
+              <td>1</td>
+              <td>idle</td>
+              <td>8730d458def5</td>
+              <td>0.0 t</td>
+              <td>51,050.0 t</td>
+              <td>EUR 1,162,500</td>
+              <td>n/a</td>
+            </tr>
+            
+
+            <tr>
+              <td>1</td>
+              <td>greedy_shuttle</td>
+              <td>8730d458def5</td>
+              <td>13,739.7 t</td>
+              <td>51,510.3 t</td>
+              <td>EUR 2,157,819</td>
+              <td>EUR 157.05/t</td>
+            </tr>
+            
+
+            <tr>
+              <td>1</td>
+              <td>rolling_milp</td>
+              <td>8730d458def5</td>
+              <td>75,001.8 t</td>
+              <td>545.0 t</td>
+              <td>EUR 2,825,897</td>
+              <td>EUR 37.68/t</td>
+            </tr>
+            
+
+            <tr>
+              <td>2</td>
+              <td>idle</td>
+              <td>e4980f6b6ba0</td>
+              <td>0.0 t</td>
+              <td>52,478.8 t</td>
+              <td>EUR 1,162,500</td>
+              <td>n/a</td>
+            </tr>
+            
+
+            <tr>
+              <td>2</td>
+              <td>greedy_shuttle</td>
+              <td>e4980f6b6ba0</td>
+              <td>13,740.0 t</td>
+              <td>52,938.8 t</td>
+              <td>EUR 2,157,824</td>
+              <td>EUR 157.05/t</td>
+            </tr>
+            
+
+            <tr>
+              <td>2</td>
+              <td>rolling_milp</td>
+              <td>e4980f6b6ba0</td>
+              <td>72,540.9 t</td>
+              <td>361.9 t</td>
+              <td>EUR 2,772,275</td>
+              <td>EUR 38.22/t</td>
+            </tr>
+            
+
+            <tr>
+              <td>3</td>
+              <td>idle</td>
+              <td>1081a6111867</td>
+              <td>0.0 t</td>
+              <td>52,869.1 t</td>
+              <td>EUR 1,162,500</td>
+              <td>n/a</td>
+            </tr>
+            
+
+            <tr>
+              <td>3</td>
+              <td>greedy_shuttle</td>
+              <td>1081a6111867</td>
+              <td>13,735.8 t</td>
+              <td>53,333.3 t</td>
+              <td>EUR 2,157,767</td>
+              <td>EUR 157.09/t</td>
+            </tr>
+            
+
+            <tr>
+              <td>3</td>
+              <td>rolling_milp</td>
+              <td>1081a6111867</td>
+              <td>74,475.1 t</td>
+              <td>0.0 t</td>
+              <td>EUR 2,833,717</td>
+              <td>EUR 38.05/t</td>
+            </tr>
+            
+
+            <tr>
+              <td>4</td>
+              <td>idle</td>
+              <td>1af186baf232</td>
+              <td>0.0 t</td>
+              <td>52,501.6 t</td>
+              <td>EUR 1,162,500</td>
+              <td>n/a</td>
+            </tr>
+            
+
+            <tr>
+              <td>4</td>
+              <td>greedy_shuttle</td>
+              <td>1af186baf232</td>
+              <td>14,537.7 t</td>
+              <td>52,964.0 t</td>
+              <td>EUR 2,166,912</td>
+              <td>EUR 149.05/t</td>
+            </tr>
+            
+
+            <tr>
+              <td>4</td>
+              <td>rolling_milp</td>
+              <td>1af186baf232</td>
+              <td>73,035.0 t</td>
+              <td>566.5 t</td>
+              <td>EUR 2,796,409</td>
+              <td>EUR 38.29/t</td>
+            </tr>
+            
+
+            <tr>
+              <td>5</td>
+              <td>idle</td>
+              <td>853b277aca2b</td>
+              <td>0.0 t</td>
+              <td>52,413.3 t</td>
+              <td>EUR 1,162,500</td>
+              <td>n/a</td>
+            </tr>
+            
+
+            <tr>
+              <td>5</td>
+              <td>greedy_shuttle</td>
+              <td>853b277aca2b</td>
+              <td>13,740.0 t</td>
+              <td>52,873.3 t</td>
+              <td>EUR 2,157,824</td>
+              <td>EUR 157.05/t</td>
+            </tr>
+            
+
+            <tr>
+              <td>5</td>
+              <td>rolling_milp</td>
+              <td>853b277aca2b</td>
+              <td>65,785.2 t</td>
+              <td>633.2 t</td>
+              <td>EUR 2,689,476</td>
+              <td>EUR 40.88/t</td>
+            </tr>
+            </tbody>
+      </table>
+    </section>
+  </main>
+</body>
+</html>

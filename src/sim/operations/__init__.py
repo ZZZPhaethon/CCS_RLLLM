@@ -1,1 +1,4 @@
-"""Domain operations used by the physical network stepper."""
+"""Backward-compatible import path for :mod:`sim.physical.operations`."""
+
+from ..physical.operations import *
+

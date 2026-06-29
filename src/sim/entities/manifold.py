@@ -1,10 +1,4 @@
-from __future__ import annotations
+"""Backward-compatible import path for :mod:`sim.physical.entities.manifold`."""
 
-from dataclasses import dataclass
+from ..physical.entities.manifold import *
 
-
-@dataclass(frozen=True)
-class SubseaManifold:
-    entity_id: str
-    max_flow_tph: float
-    available: bool = True

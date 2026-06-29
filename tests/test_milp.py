@@ -3,7 +3,7 @@ import unittest
 try:
     import pulp  # noqa: F401
 
-    from sim.milp import extract_params, solve_min_makespan
+    from sim.milp import extract_params, solve_max_storage_fixed_horizon, solve_min_makespan
     HAVE_PULP = True
 except ImportError:
     HAVE_PULP = False
@@ -55,6 +55,13 @@ class MilpTests(unittest.TestCase):
         small = solve_min_makespan(_env(), target_t=800.0)
         large = solve_min_makespan(_env(), target_t=2_400.0)
         self.assertGreaterEqual(large.makespan_h, small.makespan_h)
+
+    def test_fixed_horizon_maximizes_storage(self):
+        result = solve_max_storage_fixed_horizon(_env(), horizon_h=168)
+        self.assertEqual(result.status, "Optimal")
+        self.assertGreater(result.stored_t, 0.0)
+        self.assertGreater(result.deliveries, 0)
+        self.assertGreater(result.operating_cost, 0.0)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,11 @@
 .claude/
 .DS_Store
 .pytest_cache/
+.uv-cache/
+.uv-python/
+.venv/
 __pycache__/
 *.py[cod]
+src/*.egg-info/
 tmp/
 output/
