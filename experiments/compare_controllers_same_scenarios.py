@@ -2,8 +2,8 @@
 
 Each controller gets a fresh environment for a seed, while ``ScenarioGenerator``
 uses the same seed so disturbances are comparable across controllers. Static
-MILP benchmarks are reported separately because they are nominal optimizers, not
-episode controllers.
+MILP benchmarks are reported separately because they are perfect-foresight
+optimizers, not episode controllers.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ import argparse
 import csv
 import hashlib
 import json
+import math
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -19,9 +20,17 @@ from typing import Callable
 
 from sim.control.baselines import greedy_shuttle_policy, idle_policy
 from sim.control.milp import solve_max_storage_fixed_horizon, solve_min_makespan
+from sim.control.rule_based import RuleBasedActionGenerator
 from sim.control.rolling_milp import RollingMilpController
 from sim.entities import Emitter, InjectionWell, Pipeline, Reservoir, SubseaManifold, Terminal, Vessel
-from sim.environment import CCSEnv, CCSEnvConfig
+from sim.environment import (
+    CCSEnv,
+    CCSEnvConfig,
+    VESSEL_GO_HOME,
+    VESSEL_GO_TERMINAL,
+    VESSEL_WAIT,
+    WELL_ACTIONS,
+)
 from sim.metrics import EpisodeMetrics, run_episode
 from sim.network import PhysicalNetwork
 from sim.scenario_generation import Scenario, ScenarioConfig, ScenarioGenerator
@@ -117,6 +126,38 @@ def scenario_signature(scenario: Scenario) -> str:
     return hashlib.sha256(blob).hexdigest()[:12]
 
 
+def rule_based_env_policy(env: CCSEnv) -> Callable[[CCSEnv], list[int]]:
+    generator = RuleBasedActionGenerator(env.network, env._routes)
+
+    def policy(current_env: CCSEnv) -> list[int]:
+        frame = generator.next_action_frame(current_env.simulator.state)
+        action = [VESSEL_WAIT] * len(current_env.vessel_ids) + [0] * len(current_env.well_ids)
+        mask = current_env.action_mask()
+        vessel_index = {vessel_id: i for i, vessel_id in enumerate(current_env.vessel_ids)}
+        well_index = {well_id: i for i, well_id in enumerate(current_env.well_ids)}
+
+        for proposal in frame.proposals:
+            if proposal.verb == "sail_to" and proposal.entity_id in vessel_index:
+                i = vessel_index[proposal.entity_id]
+                route = current_env._routes[proposal.entity_id]
+                destination = str(proposal.params["destination_id"])
+                if destination == route["origin"] and mask[i][VESSEL_GO_HOME]:
+                    action[i] = VESSEL_GO_HOME
+                elif destination == route["destination"] and mask[i][VESSEL_GO_TERMINAL]:
+                    action[i] = VESSEL_GO_TERMINAL
+            elif proposal.verb == "set_well_split":
+                for well_id, split in proposal.params["well_splits"].items():
+                    if float(split) <= 0.0 or well_id not in well_index:
+                        continue
+                    i = len(current_env.vessel_ids) + well_index[well_id]
+                    if mask[i][WELL_ACTIONS - 1]:
+                        action[i] = WELL_ACTIONS - 1
+
+        return action
+
+    return policy
+
+
 def controller_factories(
     replan_every: int,
     progress: ProgressLogger,
@@ -125,6 +166,7 @@ def controller_factories(
     return {
         "idle": lambda _env: idle_policy,
         "greedy_shuttle": lambda _env: greedy_shuttle_policy,
+        "rule_based": rule_based_env_policy,
         "rolling_milp": lambda env: RollingMilpController(
             env,
             replan_every=replan_every,
@@ -206,15 +248,33 @@ def static_milp_benchmark(target_t: float, cap_hours: int) -> dict[str, object]:
     }
 
 
-def static_fixed_horizon_milp_benchmark(cap_hours: int, time_limit_s: float | None) -> dict[str, object]:
+def static_fixed_horizon_milp_benchmark(
+    cap_hours: int,
+    time_limit_s: float | None,
+    mip_gap_rel: float | None,
+    mip_gap_abs: float | None,
+    *,
+    scenario_seed_config: ScenarioConfig,
+    seed: int,
+) -> dict[str, object]:
     env = make_env(
         target_t=None,
         cap_hours=cap_hours,
-        scenario_seed_config=_quiet_config(cap_hours, random_initial_inventory=False),
+        scenario_seed_config=scenario_seed_config,
     )
-    result = solve_max_storage_fixed_horizon(env, horizon_h=cap_hours, time_limit_s=time_limit_s)
+    scenario = env.scenario_generator.sample(env.network, seed=seed)
+    result = solve_max_storage_fixed_horizon(
+        env,
+        horizon_h=cap_hours,
+        time_limit_s=time_limit_s,
+        mip_gap_rel=mip_gap_rel,
+        mip_gap_abs=mip_gap_abs,
+        scenario=scenario,
+    )
     return {
-        "case": "static_milp_fixed_horizon_nominal",
+        "case": "static_milp_fixed_horizon_scenario_oracle",
+        "seed": seed,
+        "scenario_signature": scenario_signature(scenario),
         "horizon_h": cap_hours,
         "status": result.status,
         "stored_t": result.stored_t,
@@ -222,6 +282,28 @@ def static_fixed_horizon_milp_benchmark(cap_hours: int, time_limit_s: float | No
         "operating_cost": result.operating_cost,
         "cost_per_stored_t": result.cost_per_stored_t,
         "time_limit_s": "" if time_limit_s is None else time_limit_s,
+        "mip_gap_rel": "" if mip_gap_rel is None else mip_gap_rel,
+        "mip_gap_abs": "" if mip_gap_abs is None else mip_gap_abs,
+    }
+
+
+def summarize_static_fixed_horizon_benchmarks(rows: list[dict[str, object]]) -> dict[str, object]:
+    if len(rows) == 1:
+        return rows[0]
+    stored_mean = sum(float(row["stored_t"]) for row in rows) / len(rows)
+    cost_mean = sum(float(row["operating_cost"]) for row in rows) / len(rows)
+    return {
+        "case": "static_milp_fixed_horizon_scenario_oracle_summary",
+        "episodes": len(rows),
+        "horizon_h": rows[0]["horizon_h"],
+        "status": ";".join(sorted({str(row["status"]) for row in rows})),
+        "stored_t": stored_mean,
+        "deliveries": sum(float(row["deliveries"]) for row in rows) / len(rows),
+        "operating_cost": cost_mean,
+        "cost_per_stored_t": cost_mean / stored_mean if stored_mean > 0 else float("nan"),
+        "time_limit_s": rows[0].get("time_limit_s", ""),
+        "mip_gap_rel": rows[0].get("mip_gap_rel", ""),
+        "mip_gap_abs": rows[0].get("mip_gap_abs", ""),
     }
 
 
@@ -234,23 +316,37 @@ def write_csv(path: Path, rows: list[dict[str, object]]) -> None:
         writer.writerows(rows)
 
 
+def format_cost_per_t(value: object) -> str:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return "n/a"
+    if not math.isfinite(numeric):
+        return "n/a"
+    return f"EUR {numeric:,.2f}"
+
+
 def write_report(path: Path, *, summary_rows: list[dict[str, object]], benchmark: dict[str, object]) -> None:
     lines = [
         "# Same-Scenario Controller Comparison",
         "",
         "All episode controllers are evaluated on identical disturbance trajectories for each seed.",
-        "The static MILP row is a separate nominal benchmark, not a disturbed episode rollout.",
+        "The static MILP row is a separate perfect-foresight benchmark, not an online episode controller.",
         "",
         "## Static MILP Benchmark",
         "",
     ]
-    if benchmark.get("case") == "static_milp_fixed_horizon_nominal":
+    if str(benchmark.get("case", "")).startswith("static_milp_fixed_horizon"):
+        label = "same-scenario oracle" if "scenario_oracle" in str(benchmark.get("case", "")) else "nominal"
+        episodes = benchmark.get("episodes")
+        episodes_text = "" if episodes is None else f"; episodes: {episodes}"
         lines.append(
-            f"- horizon: {float(benchmark['horizon_h']):.0f} h; "
+            f"- {label}; horizon: {float(benchmark['horizon_h']):.0f} h{episodes_text}; "
+            f"status: {benchmark['status']}; "
             f"stored: {float(benchmark['stored_t']):,.1f} t; "
             f"deliveries: {benchmark['deliveries']}; "
             f"operating cost: EUR {float(benchmark['operating_cost']):,.0f}; "
-            f"cost/t: EUR {float(benchmark['cost_per_stored_t']):,.2f}"
+            f"cost/t: {format_cost_per_t(benchmark['cost_per_stored_t'])}"
         )
     elif benchmark.get("status") == "skipped":
         lines.append(f"- target: {float(benchmark['target_t']):.0f} t; static MILP solve skipped.")
@@ -260,7 +356,7 @@ def write_report(path: Path, *, summary_rows: list[dict[str, object]], benchmark
             f"makespan: {float(benchmark['makespan_h']):.0f} h; "
             f"deliveries: {benchmark['deliveries']}; "
             f"operating cost: EUR {float(benchmark['operating_cost']):,.0f}; "
-            f"cost/t: EUR {float(benchmark['cost_per_stored_t']):,.2f}"
+            f"cost/t: {format_cost_per_t(benchmark['cost_per_stored_t'])}"
         )
     lines += [
         "",
@@ -294,7 +390,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--controllers",
         nargs="+",
-        choices=["idle", "greedy_shuttle", "rolling_milp"],
+        choices=["idle", "greedy_shuttle", "rule_based", "rolling_milp"],
         default=["idle", "greedy_shuttle", "rolling_milp"],
     )
     parser.add_argument("--rolling-replan-every", type=int, default=12)
@@ -305,7 +401,19 @@ def parse_args() -> argparse.Namespace:
         help="Optional rolling MILP chunk target. Use this for large storage goals to avoid huge MILPs.",
     )
     parser.add_argument("--skip-static-milp", action="store_true")
-    parser.add_argument("--static-milp-time-limit-s", type=float, default=60.0)
+    parser.add_argument("--static-milp-time-limit-s", type=float, default=600.0)
+    parser.add_argument(
+        "--static-milp-gap-rel",
+        type=float,
+        default=None,
+        help="Optional relative MIP gap tolerance for the fixed-horizon static MILP.",
+    )
+    parser.add_argument(
+        "--static-milp-gap-abs",
+        type=float,
+        default=None,
+        help="Optional absolute MIP gap tolerance for the fixed-horizon static MILP.",
+    )
     parser.add_argument("--random-initial-inventory", action="store_true")
     parser.add_argument("--quiet-scenario", action="store_true")
     return parser.parse_args()
@@ -346,6 +454,7 @@ def main() -> None:
     )
 
     rows: list[dict[str, object]] = []
+    seed_to_signature: dict[int, str] = {}
     total_runs = len(args.seeds) * len(args.controllers)
     run_index = 0
     script_start = time.perf_counter()
@@ -378,11 +487,26 @@ def main() -> None:
             )
         if len(seed_signatures) != 1:
             raise RuntimeError(f"Seed {seed} did not produce identical scenarios across controllers.")
+        seed_to_signature[seed] = next(iter(seed_signatures))
 
     summary_rows = summarize(rows)
+    benchmark_rows: list[dict[str, object]]
     if args.mode == "fixed-horizon":
-        log("Solving static MILP fixed-horizon nominal benchmark ...")
-        benchmark = static_fixed_horizon_milp_benchmark(args.cap_hours, args.static_milp_time_limit_s)
+        benchmark_rows = []
+        for seed in args.seeds:
+            log(f"Solving static MILP fixed-horizon same-scenario oracle for seed={seed} ...")
+            row = static_fixed_horizon_milp_benchmark(
+                args.cap_hours,
+                args.static_milp_time_limit_s,
+                args.static_milp_gap_rel,
+                args.static_milp_gap_abs,
+                scenario_seed_config=scenario_config,
+                seed=seed,
+            )
+            if row["scenario_signature"] != seed_to_signature[seed]:
+                raise RuntimeError(f"Static MILP scenario signature mismatch for seed {seed}.")
+            benchmark_rows.append(row)
+        benchmark = summarize_static_fixed_horizon_benchmarks(benchmark_rows)
     elif args.skip_static_milp:
         log("Skipping static MILP nominal lower-bound benchmark.")
         benchmark = {
@@ -395,13 +519,17 @@ def main() -> None:
             "operating_cost": "",
             "cost_per_stored_t": "",
         }
+        benchmark_rows = [benchmark]
     else:
         log("Solving static MILP nominal lower-bound benchmark ...")
         benchmark = static_milp_benchmark(args.target_t, args.cap_hours)
+        benchmark_rows = [benchmark]
 
     write_csv(args.output_dir / "controller_comparison_by_seed.csv", rows)
     write_csv(args.output_dir / "controller_comparison_summary.csv", summary_rows)
-    write_csv(args.output_dir / "static_milp_nominal_benchmark.csv", [benchmark])
+    write_csv(args.output_dir / "static_milp_nominal_benchmark.csv", benchmark_rows)
+    if args.mode == "fixed-horizon":
+        write_csv(args.output_dir / "static_milp_same_scenario_benchmark.csv", benchmark_rows)
     write_report(args.output_dir / "controller_comparison_report.md", summary_rows=summary_rows, benchmark=benchmark)
     log(f"Wrote outputs to {args.output_dir}")
     log(f"Total wall-clock time: {time.perf_counter() - script_start:.1f}s")
