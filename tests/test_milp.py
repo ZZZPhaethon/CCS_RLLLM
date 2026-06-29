@@ -13,7 +13,7 @@ from sim.control.milp import extract_params, solve_min_makespan
 from sim.environment import CCSEnv, CCSEnvConfig
 from sim.entities import Emitter, InjectionWell, Pipeline, Reservoir, SubseaManifold, Terminal, Vessel
 from sim.network import PhysicalNetwork
-from sim.scenario_generation import ScenarioConfig, ScenarioGenerator
+from sim.scenario_generation import Scenario, ScenarioConfig, ScenarioGenerator
 from tests.fixtures.toy_networks import TOY_TWO_SOURCE_LOCATIONS, make_toy_two_source_network
 
 
@@ -54,6 +54,22 @@ def _unbalanced_source_env() -> CCSEnv:
             "short_ship": {"origin": "slow_source", "destination": "terminal", "distance_km": 1.852, "speed_knots": 1.0},
             "long_ship": {"origin": "fast_source", "destination": "terminal", "distance_km": 92.6, "speed_knots": 1.0},
         },
+    )
+
+
+def _scenario_for_env(env: CCSEnv, horizon_h: int, *, capture: float = 1.0, wells_available: bool = True) -> Scenario:
+    return Scenario(
+        time_step_hours=1.0,
+        n_steps=horizon_h,
+        emitter_availability={emitter_id: [capture] * horizon_h for emitter_id in env.emitter_ids},
+        vessel_speed_factor={vessel_id: [1.0] * horizon_h for vessel_id in env.vessel_ids},
+        well_available={well_id: [wells_available] * horizon_h for well_id in env.well_ids},
+        injectivity_factor={well_id: [1.0] * horizon_h for well_id in env.well_ids},
+        berth_count_override={
+            terminal_id: [env.network.entities[terminal_id].berth_count] * horizon_h
+            for terminal_id in env.terminal_ids
+        },
+        seed=17,
     )
 
 
@@ -117,6 +133,26 @@ class MilpTests(unittest.TestCase):
         self.assertEqual(result.schedule["short_ship"], [])
         self.assertEqual(len(result.schedule["long_ship"]), 1)
         self.assertAlmostEqual(result.stored_t, 1_000.0)
+
+    def test_fixed_horizon_scenario_capture_outage_limits_storage(self):
+        env = _env(cap_hours=80)
+        scenario = _scenario_for_env(env, horizon_h=80, capture=0.0)
+
+        result = milp_module.solve_max_storage_fixed_horizon(env, horizon_h=80, scenario=scenario)
+
+        self.assertEqual(result.status, "Optimal")
+        self.assertAlmostEqual(result.stored_t, 0.0)
+        self.assertEqual(result.deliveries, 0)
+
+    def test_fixed_horizon_scenario_well_outage_blocks_storage(self):
+        env = _env(cap_hours=80)
+        scenario = _scenario_for_env(env, horizon_h=80, wells_available=False)
+        scenario.initial_inventory_t = {"terminal": 1_000.0}
+
+        result = milp_module.solve_max_storage_fixed_horizon(env, horizon_h=80, scenario=scenario)
+
+        self.assertEqual(result.status, "Optimal")
+        self.assertAlmostEqual(result.stored_t, 0.0)
 
 
 if __name__ == "__main__":
