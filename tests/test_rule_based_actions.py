@@ -1,14 +1,14 @@
 import unittest
 
 from sim.entities import Emitter, InjectionWell, Pipeline, Terminal, Vessel
-from sim.action_resolver import ActionResolver
-from sim.rule_based import RuleBasedActionGenerator
-from sim.scenarios import build_northern_lights_phase1_plus_yara_demo
+from sim.actions import ActionResolver
+from sim.control.rule_based import RuleBasedActionGenerator
+from sim.network_scenarios import build_northern_lights_phase1_demo
 
 
 class RuleBasedActionGeneratorTests(unittest.TestCase):
     def setUp(self):
-        self.network, self.state = build_northern_lights_phase1_plus_yara_demo()
+        self.network, self.state = build_northern_lights_phase1_demo()
         self.routes = {
             "northern_pioneer": {"origin": "brevik", "destination": "oygarden_terminal"},
             "northern_pathfinder": {"origin": "celsio", "destination": "oygarden_terminal"},

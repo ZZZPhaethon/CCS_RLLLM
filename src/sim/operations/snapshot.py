@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 
-from ..disturbances import (
+from ..scenario_generation.disturbance_resolver import (
     emitter_availability,
     well_injectivity_factor,
     well_is_available,

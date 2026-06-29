@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ..disturbances import terminal_berth_count
+from ..scenario_generation.disturbance_resolver import terminal_berth_count
 from ..entities.state import PhysicalState, Violation
 from ..entities.terminal import Terminal
 from ..entities.vessel import Vessel

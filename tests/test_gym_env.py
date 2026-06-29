@@ -4,20 +4,20 @@ try:
     import numpy as np
     import gymnasium  # noqa: F401
 
-    from sim.gym_env import CCSGymEnv, flat_action_mask
+    from sim.environment.gym_adapter import CCSGymEnv, flat_action_mask
     HAVE_GYM = True
 except ImportError:
     HAVE_GYM = False
 
-from sim.env import CCSEnv, CCSEnvConfig
-from sim.scenario import ScenarioConfig, ScenarioGenerator
-from test_env import _LOCATIONS, _network
+from sim.environment import CCSEnv, CCSEnvConfig
+from sim.scenario_generation import ScenarioConfig, ScenarioGenerator
+from tests.fixtures.toy_networks import TOY_TWO_SOURCE_LOCATIONS, make_toy_two_source_network
 
 
 def _gym_env() -> "CCSGymEnv":
     native = CCSEnv(
-        _network(),
-        _LOCATIONS,
+        make_toy_two_source_network(),
+        TOY_TWO_SOURCE_LOCATIONS,
         scenario_generator=ScenarioGenerator(config=ScenarioConfig(episode_hours=24)),
         config=CCSEnvConfig(episode_hours=24),
     )

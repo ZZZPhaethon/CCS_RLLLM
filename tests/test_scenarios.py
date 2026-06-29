@@ -4,14 +4,13 @@ import unittest
 
 from sim.entities import Emitter, InjectionWell, Pipeline, Reservoir, SubseaManifold, Terminal, Vessel
 from sim.routes import route_distance_km
-from sim.scenarios import (
+from sim.network_scenarios import (
     EOS_SUBSEA_TEMPLATE_LOCATION,
     NATURGASSPARKEN,
+    NORTHERN_LIGHTS_PHASE1_CAPTURE_PROFILE_PATH,
     NORTHERN_LIGHTS_PHASE1_DATA_PATH,
-    NORTHERN_LIGHTS_PHASE1_PLUS_YARA_DATA_PATH,
     NORTHERN_LIGHTS_PHASE2_DATA_PATH,
     build_northern_lights_phase2_demo,
-    build_northern_lights_phase1_plus_yara_demo,
     build_northern_lights_phase1_demo,
 )
 
@@ -25,12 +24,12 @@ class ScenarioTests(unittest.TestCase):
         self.assertIn("northern_pioneer", network.entities)
         self.assertIn("aurora_reservoir", network.entities)
         self.assertIn("aurora_subsea_manifold", network.entities)
-        self.assertNotIn("yara", network.entities)
+        self.assertIn("yara_sluiskil", network.entities)
         self.assertEqual(network.downstream_of("oygarden_terminal"), ["oygarden_pipeline"])
         self.assertEqual(network.downstream_of("oygarden_pipeline"), ["aurora_subsea_manifold"])
-        self.assertEqual(network.downstream_of("aurora_subsea_manifold"), ["aurora_well_a", "aurora_well_c"])
-        self.assertEqual(network.downstream_of("aurora_well_a"), ["aurora_reservoir"])
-        self.assertEqual(network.downstream_of("aurora_well_c"), ["aurora_reservoir"])
+        self.assertEqual(network.downstream_of("aurora_subsea_manifold"), ["aurora_well_a7_ah", "aurora_well_c1_h"])
+        self.assertEqual(network.downstream_of("aurora_well_a7_ah"), ["aurora_reservoir"])
+        self.assertEqual(network.downstream_of("aurora_well_c1_h"), ["aurora_reservoir"])
         self.assertEqual(state.entity_inventory_t["northern_pioneer"], 0.0)
 
     def test_phase1_demo_includes_reference_physical_parameters(self):
@@ -56,10 +55,10 @@ class ScenarioTests(unittest.TestCase):
         self.assertAlmostEqual(vessel.speed_knots, 14.0)
         self.assertIsInstance(terminal, Terminal)
         self.assertEqual(terminal.berth_count, 1)
-        self.assertEqual(terminal.site_name, "Naturgassparken (Northern Lights Carbon Capture Plant Site)")
+        self.assertEqual(terminal.site_name, "Naturgassparken / Oygarden receiving terminal")
         self.assertIsInstance(pipeline, Pipeline)
-        self.assertAlmostEqual(pipeline.annual_capacity_tpy, 5_000_000.0)
-        self.assertAlmostEqual(pipeline.max_flow_tph, 5_000_000.0 / 8760.0)
+        self.assertAlmostEqual(pipeline.annual_capacity_tpy, 1_500_000.0)
+        self.assertAlmostEqual(pipeline.max_flow_tph, 1_500_000.0 / 8760.0)
         self.assertAlmostEqual(pipeline.length_km, 100.4)
         self.assertEqual(pipeline.route_color, "#ff0000")
         self.assertGreaterEqual(len(pipeline.route_coordinates), 4)
@@ -67,7 +66,7 @@ class ScenarioTests(unittest.TestCase):
         self.assertEqual(pipeline.route_coordinates[-1], EOS_SUBSEA_TEMPLATE_LOCATION)
         self.assertAlmostEqual(route_distance_km(pipeline.route_coordinates), 100.4, delta=0.5)
         self.assertIsInstance(manifold, SubseaManifold)
-        self.assertAlmostEqual(manifold.max_flow_tph, 5_000_000.0 / 8760.0)
+        self.assertAlmostEqual(manifold.max_flow_tph, 1_500_000.0 / 8760.0)
         self.assertIsInstance(reservoir, Reservoir)
         self.assertAlmostEqual(reservoir.depth_m, 2_600.0)
 
@@ -127,9 +126,9 @@ class ScenarioTests(unittest.TestCase):
         self.assertEqual(network.downstream_of("aurora_well_c1_h"), ["aurora_reservoir"])
         self.assertEqual(state.entity_inventory_t["stockholm_exergi"], 0.0)
 
-    def test_phase1_plus_yara_demo_has_three_emitters_four_ships_and_two_wells(self):
-        network, state = build_northern_lights_phase1_plus_yara_demo()
-        with NORTHERN_LIGHTS_PHASE1_PLUS_YARA_DATA_PATH.open(encoding="utf-8") as handle:
+    def test_phase1_demo_has_three_emitters_four_ships_and_two_wells(self):
+        network, state = build_northern_lights_phase1_demo()
+        with NORTHERN_LIGHTS_PHASE1_DATA_PATH.open(encoding="utf-8") as handle:
             payload = json.load(handle)
 
         emitters = [entity for entity in network.entities.values() if isinstance(entity, Emitter)]
@@ -151,12 +150,9 @@ class ScenarioTests(unittest.TestCase):
         self.assertEqual(network.downstream_of("aurora_subsea_manifold"), ["aurora_well_a7_ah", "aurora_well_c1_h"])
         self.assertEqual(state.entity_inventory_t["yara_sluiskil"], 0.0)
 
-    def test_phase1_plus_yara_demo_uses_hourly_emitter_profile_from_data(self):
-        network, state = build_northern_lights_phase1_plus_yara_demo()
-        profile_path = NORTHERN_LIGHTS_PHASE1_PLUS_YARA_DATA_PATH.parent / (
-            "phase1plus_emitters_capture_rate_profile_hourly.csv"
-        )
-        with profile_path.open(encoding="utf-8", newline="") as handle:
+    def test_phase1_demo_uses_hourly_emitter_profile_from_data(self):
+        network, state = build_northern_lights_phase1_demo()
+        with NORTHERN_LIGHTS_PHASE1_CAPTURE_PROFILE_PATH.open(encoding="utf-8", newline="") as handle:
             first_hour = next(csv.DictReader(handle))
 
         brevik = network.entities["brevik"]
@@ -168,8 +164,8 @@ class ScenarioTests(unittest.TestCase):
         self.assertNotAlmostEqual(expected_rate_tph, brevik.nominal_capture_tph)
         self.assertAlmostEqual(result.state.last_capture_tph["brevik"], expected_rate_tph)
 
-    def test_phase1_plus_yara_pipeline_and_wells_use_1_5_mtpa_capacity(self):
-        network, _ = build_northern_lights_phase1_plus_yara_demo()
+    def test_phase1_pipeline_and_wells_use_1_5_mtpa_capacity(self):
+        network, _ = build_northern_lights_phase1_demo()
         expected_tph = 1_500_000.0 / 8760.0
 
         pipeline = network.entities["oygarden_pipeline"]

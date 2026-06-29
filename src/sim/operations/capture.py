@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ..disturbances import emitter_availability
+from ..scenario_generation.disturbance_resolver import emitter_availability
 from ..entities.emitter import Emitter
 from ..entities.state import PhysicalState, Violation
 

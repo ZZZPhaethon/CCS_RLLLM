@@ -2,12 +2,9 @@
 
 A controller (heuristic, MILP or RL policy) is just a callable
 ``policy(env) -> list[int]``. :func:`run_episode` rolls it out against a
-:class:`~sim.env.CCSEnv` and returns an :class:`EpisodeMetrics` with the physical
+:class:`~sim.environment.CCSEnv` and returns an :class:`EpisodeMetrics` with the physical
 and economic KPIs of section 13; :func:`evaluate` repeats this across seeds and
 aggregates mean/std so baselines and policies can be compared on equal footing.
-
-Two reference policies (:func:`idle_policy`, :func:`greedy_shuttle_policy`) are
-provided both as smoke-test controllers and as the non-RL heuristic baseline.
 """
 
 from __future__ import annotations
@@ -16,13 +13,7 @@ import statistics
 from dataclasses import asdict, dataclass
 from typing import Callable
 
-from .env import (
-    VESSEL_GO_HOME,
-    VESSEL_GO_TERMINAL,
-    VESSEL_WAIT,
-    WELL_ACTIONS,
-    CCSEnv,
-)
+from .environment import CCSEnv
 
 Policy = Callable[[CCSEnv], list[int]]
 
@@ -264,25 +255,3 @@ def aggregate_metrics(episodes: list[EpisodeMetrics]) -> dict[str, dict[str, flo
         }
     return summary
 
-
-# -- reference baseline policies -----------------------------------------
-def idle_policy(env: CCSEnv) -> list[int]:
-    """Do nothing: never dispatch a vessel, never inject."""
-    return [VESSEL_WAIT] * len(env.vessel_ids) + [0] * len(env.well_ids)
-
-
-def greedy_shuttle_policy(env: CCSEnv) -> list[int]:
-    """Send loaded vessels to the terminal, empties home; inject at full rate."""
-    state = env.simulator.state
-    action: list[int] = []
-    for i, vessel_id in enumerate(env.vessel_ids):
-        mask = env.action_mask()[i]
-        cargo = state.entity_inventory_t.get(vessel_id, 0.0)
-        if mask[VESSEL_GO_TERMINAL] and cargo > _EPS:
-            action.append(VESSEL_GO_TERMINAL)        # full-ish: deliver
-        elif mask[VESSEL_GO_HOME] and cargo <= _EPS:
-            action.append(VESSEL_GO_HOME)            # empty at terminal: fetch more
-        else:
-            action.append(VESSEL_WAIT)               # loading at home / unloading at terminal
-    action += [WELL_ACTIONS - 1] * len(env.well_ids)  # wells HIGH
-    return action

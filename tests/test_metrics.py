@@ -1,22 +1,21 @@
 import unittest
 
-from sim.env import CCSEnv, CCSEnvConfig
+from sim.control.baselines import greedy_shuttle_policy, idle_policy
+from sim.environment import CCSEnv, CCSEnvConfig
 from sim.metrics import (
     EpisodeMetrics,
     aggregate_metrics,
     evaluate,
-    greedy_shuttle_policy,
-    idle_policy,
     run_episode,
 )
-from sim.scenario import ScenarioConfig, ScenarioGenerator
-from test_env import _LOCATIONS, _network
+from sim.scenario_generation import ScenarioConfig, ScenarioGenerator
+from tests.fixtures.toy_networks import TOY_TWO_SOURCE_LOCATIONS, make_toy_two_source_network
 
 
 def _env(episode_hours: int = 48, **config) -> CCSEnv:
     return CCSEnv(
-        _network(),
-        _LOCATIONS,
+        make_toy_two_source_network(),
+        TOY_TWO_SOURCE_LOCATIONS,
         scenario_generator=ScenarioGenerator(config=ScenarioConfig(episode_hours=episode_hours)),
         config=CCSEnvConfig(episode_hours=episode_hours, **config),
     )
@@ -82,8 +81,8 @@ class RunEpisodeTests(unittest.TestCase):
 class GoalModeTests(unittest.TestCase):
     def _goal_env(self, goal_t: float, cap_hours: int = 336):
         return CCSEnv(
-            _network(),
-            _LOCATIONS,
+            make_toy_two_source_network(),
+            TOY_TWO_SOURCE_LOCATIONS,
             scenario_generator=ScenarioGenerator(config=ScenarioConfig(episode_hours=cap_hours)),
             config=CCSEnvConfig(episode_hours=cap_hours, storage_goal_t=goal_t),
         )

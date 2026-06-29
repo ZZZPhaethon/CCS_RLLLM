@@ -3,9 +3,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from .action_resolver import ActionResolver
-from .actions import ActionFrame, CommittedActionFrame
-from .disturbances import vessel_speed_factor
+from .actions import ActionFrame, ActionResolver, CommittedActionFrame
+from .scenario_generation.disturbance_resolver import vessel_speed_factor
 from .entities.state import PhysicalState, StepResult
 from .network import PhysicalNetwork
 from .routes import route_distance_km

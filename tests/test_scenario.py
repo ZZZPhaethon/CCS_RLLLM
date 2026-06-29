@@ -9,7 +9,7 @@ from sim.entities import (
     Vessel,
 )
 from sim.network import PhysicalNetwork
-from sim.scenario import Scenario, ScenarioConfig, ScenarioGenerator
+from sim.scenario_generation import Scenario, ScenarioConfig, ScenarioGenerator
 
 
 def _network(with_reservoir: bool = False) -> PhysicalNetwork:

@@ -1,16 +1,16 @@
 import unittest
 
-from sim.env import CCSEnvConfig
-from sim.env_scenarios import build_phase1_plus_yara_env
-from sim.metrics import greedy_shuttle_policy, idle_policy, run_episode
-from sim.scenario import ScenarioConfig, ScenarioGenerator
+from sim.control.baselines import greedy_shuttle_policy, idle_policy
+from sim.environment import CCSEnvConfig, build_phase1_env
+from sim.metrics import run_episode
+from sim.scenario_generation import ScenarioConfig, ScenarioGenerator
 
 
-class Phase1PlusYaraEnvTests(unittest.TestCase):
+class Phase1EnvTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         # Building the env runs searoute once per vessel; do it a single time.
-        cls.env = build_phase1_plus_yara_env(
+        cls.env = build_phase1_env(
             scenario_generator=ScenarioGenerator(config=ScenarioConfig(episode_hours=72)),
             config=CCSEnvConfig(episode_hours=72, storage_target_rate=0.9),
         )

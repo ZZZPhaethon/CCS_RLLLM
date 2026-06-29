@@ -1,7 +1,7 @@
 import unittest
 
 from sim.actions import ActionFrame, ActionProposal
-from sim.disturbances import (
+from sim.scenario_generation.disturbance_resolver import (
     emitter_availability,
     terminal_berth_count,
     vessel_speed_factor,

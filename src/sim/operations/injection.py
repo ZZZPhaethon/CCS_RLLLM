@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ..disturbances import well_max_injection_tph
+from ..scenario_generation.disturbance_resolver import well_max_injection_tph
 from ..entities.state import PhysicalState
 from ..entities.storage import InjectionWell, Reservoir
 

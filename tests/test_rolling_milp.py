@@ -3,24 +3,25 @@ import unittest
 try:
     import pulp  # noqa: F401
 
-    from sim.milp import solve_min_makespan
-    from sim.rolling_milp import RollingMilpController
+    from sim.control.milp import solve_min_makespan
+    from sim.control.rolling_milp import RollingMilpController
     HAVE_PULP = True
 except ImportError:
     HAVE_PULP = False
 
-from sim.env import CCSEnv, CCSEnvConfig
-from sim.metrics import greedy_shuttle_policy, run_episode
-from sim.scenario import ScenarioConfig, ScenarioGenerator
-from test_env import _LOCATIONS, _network
+from sim.control.baselines import greedy_shuttle_policy
+from sim.environment import CCSEnv, CCSEnvConfig
+from sim.metrics import run_episode
+from sim.scenario_generation import ScenarioConfig, ScenarioGenerator
+from tests.fixtures.toy_networks import TOY_TWO_SOURCE_LOCATIONS, make_toy_two_source_network
 
 
 def _cold_env(goal_t: float, cap_hours: int = 600) -> CCSEnv:
     # Cold start (no initial inventory) so the MILP bound and the controllers face
     # the same empty-system task.
     return CCSEnv(
-        _network(),
-        _LOCATIONS,
+        make_toy_two_source_network(),
+        TOY_TWO_SOURCE_LOCATIONS,
         scenario_generator=ScenarioGenerator(
             config=ScenarioConfig(episode_hours=cap_hours, randomize_initial_inventory=False)
         ),

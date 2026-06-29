@@ -5,17 +5,17 @@ from pathlib import Path
 from sim.entities import Emitter, InjectionWell, PhysicalState, Pipeline, Terminal
 from sim.network import PhysicalNetwork
 from sim.routes import route_distance_km
-from sim.rule_based import RuleBasedActionGenerator
+from sim.control.rule_based import RuleBasedActionGenerator
 from sim.visualization import (
     _connect_route_to_facilities,
     _interpolate_route,
     build_trajectory,
     build_demo_trajectory,
-    build_northern_lights_phase1_plus_yara_trajectory,
+    build_northern_lights_phase1_trajectory,
     build_northern_lights_phase2_trajectory,
     render_dashboard_html,
     write_dashboard,
-    write_northern_lights_phase1_plus_yara_dashboard,
+    write_northern_lights_phase1_dashboard,
     write_northern_lights_phase2_dashboard,
 )
 
@@ -50,9 +50,9 @@ class VisualizationTests(unittest.TestCase):
         )
 
         self.assertEqual(payload["frames"][1]["actions"], {"brevik": {"load_vessel": "northern_pioneer"}})
-        self.assertAlmostEqual(payload["frames"][1]["entities"]["northern_pioneer"]["inventory_t"], 45.662100456621)
+        self.assertAlmostEqual(payload["frames"][1]["entities"]["northern_pioneer"]["inventory_t"], 37.293383)
         self.assertEqual(payload["frames"][2]["flows_t"], {})
-        self.assertAlmostEqual(payload["frames"][2]["entities"]["northern_pioneer"]["inventory_t"], 45.662100456621)
+        self.assertAlmostEqual(payload["frames"][2]["entities"]["northern_pioneer"]["inventory_t"], 37.293383)
 
     def test_trajectory_uses_hourly_emitter_value_without_serializing_full_profile(self):
         network = PhysicalNetwork(time_step_hours=1.0)
@@ -101,7 +101,7 @@ class VisualizationTests(unittest.TestCase):
         self.assertIn("locations", payload["map"])
         self.assertIn("routes", payload["map"])
         self.assertIn("brevik", payload["map"]["locations"])
-        self.assertIn("aurora_well_a", payload["map"]["locations"])
+        self.assertIn("aurora_well_a7_ah", payload["map"]["locations"])
         self.assertIn("aurora_subsea_manifold", payload["map"]["locations"])
         self.assertIn("lat", payload["map"]["locations"]["brevik"])
         self.assertIn("lon", payload["map"]["locations"]["brevik"])
@@ -291,7 +291,7 @@ class VisualizationTests(unittest.TestCase):
         self.assertIn('return "storage"', html)
         self.assertIn("function storageTargetForEntity", html)
         self.assertIn("Storage:", html)
-        self.assertIn("\"aurora_well_a\": \"aurora_reservoir\"", html)
+        self.assertIn("\"aurora_well_a7_ah\": \"aurora_reservoir\"", html)
 
     def test_dashboard_playback_rate_is_user_configurable(self):
         payload = build_demo_trajectory(hours=2)
@@ -359,7 +359,7 @@ class VisualizationTests(unittest.TestCase):
         self.assertEqual({link["target"] for link in links}, {"aurora_reservoir"})
         self.assertEqual({link["relation"] for link in links}, {"injection_target"})
         for link in links:
-            self.assertIn(link["source"], {"aurora_well_a", "aurora_well_c"})
+            self.assertIn(link["source"], {"aurora_well_a7_ah", "aurora_well_c1_h"})
             self.assertIn("coordinates", link)
             self.assertEqual(link["style"], "geologic")
 
@@ -575,14 +575,14 @@ class VisualizationTests(unittest.TestCase):
         self.assertEqual(brevik_params["max_production_tph"], 56.0)
         self.assertEqual(vessel_params["volume_capacity_m3"], 7_500.0)
         self.assertEqual(vessel_params["speed_knots"], 14.0)
-        self.assertEqual(pipeline_params["annual_capacity_tpy"], 5_000_000.0)
+        self.assertEqual(pipeline_params["annual_capacity_tpy"], 1_500_000.0)
         self.assertEqual(pipeline_params["length_km"], 100.4)
         self.assertEqual(pipeline_params["route_color"], "#ff0000")
         self.assertEqual(reservoir_params["depth_m"], 2_600.0)
         self.assertIn("\"annual_target_export_tpy\": 400000.0", html)
         self.assertIn("\"volume_capacity_m3\": 7500.0", html)
         self.assertIn("\"speed_knots\": 14.0", html)
-        self.assertIn("\"annual_capacity_tpy\": 5000000.0", html)
+        self.assertIn("\"annual_capacity_tpy\": 1500000.0", html)
         self.assertIn("\"depth_m\": 2600.0", html)
 
     def test_offshore_pipeline_route_is_red_and_starts_at_naturgassparken(self):
@@ -658,10 +658,10 @@ class VisualizationTests(unittest.TestCase):
 
         self.assertEqual(route_origins, emitter_ids)
 
-    def test_phase1_plus_yara_trajectory_has_three_emitters_and_four_ships(self):
-        payload = build_northern_lights_phase1_plus_yara_trajectory(hours=72)
+    def test_phase1_trajectory_has_three_emitters_and_four_ships(self):
+        payload = build_northern_lights_phase1_trajectory(hours=72)
 
-        self.assertEqual(payload["title"], "Northern Lights Phase 1 + Yara Dashboard")
+        self.assertEqual(payload["title"], "Northern Lights Phase 1 Dashboard")
         self.assertEqual(payload["frames"][-1]["time_h"], 72)
         self.assertEqual(len(payload["map"]["routes"]), 4)
         self.assertIn("yara_sluiskil", payload["map"]["locations"])
@@ -682,19 +682,19 @@ class VisualizationTests(unittest.TestCase):
             {"aurora_well_a7_ah", "aurora_well_c1_h"},
         )
 
-    def test_write_phase1_plus_yara_dashboard(self):
+    def test_write_phase1_dashboard(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            output = write_northern_lights_phase1_plus_yara_dashboard(Path(tmpdir) / "phase1_plus_yara.html", hours=72)
+            output = write_northern_lights_phase1_dashboard(Path(tmpdir) / "phase1.html", hours=72)
 
             html = output.read_text(encoding="utf-8")
 
-        self.assertIn("Northern Lights Phase 1 + Yara Dashboard", html)
+        self.assertIn("Northern Lights Phase 1 Dashboard", html)
         self.assertIn("\"time_h\": 72.0", html)
         self.assertIn("\"yara_sluiskil\"", html)
         self.assertNotIn("\"orsted_kalundborg\"", html)
 
     def test_trajectory_accepts_rule_based_action_generator_factory(self):
-        payload = build_northern_lights_phase1_plus_yara_trajectory(
+        payload = build_northern_lights_phase1_trajectory(
             hours=2,
             action_generator_factory=lambda network, routes: RuleBasedActionGenerator(network, routes),
         )

@@ -1,15 +1,6 @@
 import unittest
 
-from sim.entities import (
-    Emitter,
-    InjectionWell,
-    Pipeline,
-    Reservoir,
-    SubseaManifold,
-    Terminal,
-    Vessel,
-)
-from sim.env import (
+from sim.environment import (
     VESSEL_GO_HOME,
     VESSEL_GO_TERMINAL,
     VESSEL_WAIT,
@@ -17,48 +8,14 @@ from sim.env import (
     CCSEnv,
     CCSEnvConfig,
 )
-from sim.network import PhysicalNetwork
-from sim.scenario import ScenarioConfig, ScenarioGenerator
-
-
-def _network() -> PhysicalNetwork:
-    network = PhysicalNetwork(time_step_hours=1.0)
-    network.add_entity(Emitter("brevik", nominal_capture_tph=80.0, buffer_capacity_t=4_000.0))
-    network.add_entity(Emitter("oslo", nominal_capture_tph=60.0, buffer_capacity_t=4_000.0))
-    network.add_entity(Vessel("ship_1", capacity_t=800.0, loading_rate_tph=800.0, unloading_rate_tph=800.0, speed_knots=12.0))
-    network.add_entity(Vessel("ship_2", capacity_t=800.0, loading_rate_tph=800.0, unloading_rate_tph=800.0, speed_knots=12.0))
-    network.add_entity(Terminal("oygarden", storage_capacity_t=6_000.0, berth_count=2))
-    network.add_entity(Pipeline("pipeline", max_flow_tph=400.0, ramp_tph=400.0))
-    network.add_entity(SubseaManifold("manifold", max_flow_tph=400.0))
-    network.add_entity(InjectionWell("well_1", max_injection_tph=200.0))
-    network.add_entity(InjectionWell("well_2", max_injection_tph=200.0))
-    network.add_entity(
-        Reservoir("aurora", storage_capacity_t=1e7, initial_pressure_bar=100.0, pressure_at_capacity_bar=200.0, max_pressure_bar=200.0)
-    )
-    network.connect("brevik", "ship_1")
-    network.connect("oslo", "ship_2")
-    network.connect("ship_1", "oygarden")
-    network.connect("ship_2", "oygarden")
-    network.connect("oygarden", "pipeline")
-    network.connect("pipeline", "manifold")
-    network.connect("manifold", "well_1")
-    network.connect("manifold", "well_2")
-    network.connect("well_1", "aurora")
-    network.connect("well_2", "aurora")
-    return network
-
-
-_LOCATIONS = {
-    "brevik": (59.05, 9.70),
-    "oslo": (59.86, 10.84),
-    "oygarden": (60.58, 4.84),
-}
+from sim.scenario_generation import ScenarioConfig, ScenarioGenerator
+from tests.fixtures.toy_networks import TOY_TWO_SOURCE_LOCATIONS, make_toy_two_source_network
 
 
 def _env(**config) -> CCSEnv:
     return CCSEnv(
-        _network(),
-        _LOCATIONS,
+        make_toy_two_source_network(),
+        TOY_TWO_SOURCE_LOCATIONS,
         scenario_generator=ScenarioGenerator(config=ScenarioConfig(episode_hours=48)),
         config=CCSEnvConfig(episode_hours=48, **config),
     )
