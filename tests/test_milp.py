@@ -9,7 +9,7 @@ except ImportError:
 
 from sim import control
 from sim.control import milp as milp_module
-from sim.control.milp import extract_params, solve_min_makespan
+from sim.control.milp import extract_params
 from sim.environment import CCSEnv, CCSEnvConfig
 from sim.entities import Emitter, InjectionWell, Pipeline, Reservoir, SubseaManifold, Terminal, Vessel
 from sim.network import PhysicalNetwork
@@ -57,6 +57,32 @@ def _unbalanced_source_env() -> CCSEnv:
     )
 
 
+def _streaming_unload_env() -> CCSEnv:
+    network = PhysicalNetwork(time_step_hours=1.0)
+    network.add_entity(Emitter("source", nominal_capture_tph=0.0, buffer_capacity_t=2_000.0))
+    network.add_entity(Vessel("ship", capacity_t=1_000.0, loading_rate_tph=1_000.0, unloading_rate_tph=500.0, speed_knots=1.0))
+    network.add_entity(Terminal("terminal", storage_capacity_t=100.0, berth_count=1))
+    network.add_entity(Pipeline("pipeline", max_flow_tph=500.0, ramp_tph=500.0))
+    network.add_entity(SubseaManifold("manifold", max_flow_tph=500.0))
+    network.add_entity(InjectionWell("well", max_injection_tph=500.0))
+    network.add_entity(Reservoir("reservoir", storage_capacity_t=1e7, initial_pressure_bar=100.0, pressure_at_capacity_bar=200.0, max_pressure_bar=200.0))
+    network.connect("source", "ship")
+    network.connect("ship", "terminal")
+    network.connect("terminal", "pipeline")
+    network.connect("pipeline", "manifold")
+    network.connect("manifold", "well")
+    network.connect("well", "reservoir")
+    return CCSEnv(
+        network,
+        {"source": (0.0, 0.0), "terminal": (0.0, 1.0)},
+        scenario_generator=ScenarioGenerator(config=ScenarioConfig(episode_hours=8, randomize_initial_inventory=False)),
+        config=CCSEnvConfig(episode_hours=8),
+        routes={
+            "ship": {"origin": "source", "destination": "terminal", "distance_km": 1.852, "speed_knots": 1.0},
+        },
+    )
+
+
 def _scenario_for_env(env: CCSEnv, horizon_h: int, *, capture: float = 1.0, wells_available: bool = True) -> Scenario:
     return Scenario(
         time_step_hours=1.0,
@@ -65,10 +91,6 @@ def _scenario_for_env(env: CCSEnv, horizon_h: int, *, capture: float = 1.0, well
         vessel_speed_factor={vessel_id: [1.0] * horizon_h for vessel_id in env.vessel_ids},
         well_available={well_id: [wells_available] * horizon_h for well_id in env.well_ids},
         injectivity_factor={well_id: [1.0] * horizon_h for well_id in env.well_ids},
-        berth_count_override={
-            terminal_id: [env.network.entities[terminal_id].berth_count] * horizon_h
-            for terminal_id in env.terminal_ids
-        },
         seed=17,
     )
 
@@ -77,6 +99,10 @@ class MilpExportTests(unittest.TestCase):
     def test_fixed_horizon_solver_is_exported(self):
         self.assertTrue(hasattr(milp_module, "solve_max_storage_fixed_horizon"))
         self.assertTrue(hasattr(control, "solve_max_storage_fixed_horizon"))
+
+    def test_min_makespan_solver_is_not_exported(self):
+        self.assertFalse(hasattr(milp_module, "solve_min_makespan"))
+        self.assertFalse(hasattr(control, "solve_min_makespan"))
 
 
 @unittest.skipUnless(HAVE_PULP, "pulp/CBC not installed")
@@ -90,35 +116,6 @@ class MilpTests(unittest.TestCase):
         for v in vessels:
             self.assertGreater(v.round_trip_h, v.startup_h)
 
-    def test_solves_and_reaches_target(self):
-        result = solve_min_makespan(_env(), target_t=1_000.0)
-        self.assertEqual(result.status, "Optimal")
-        self.assertTrue(result.reached)
-        self.assertGreater(result.makespan_h, 0.0)
-        self.assertGreaterEqual(result.deliveries, 1)
-        self.assertGreater(result.operating_cost, 0.0)
-
-    def test_makespan_respects_injection_lower_bound(self):
-        # Cannot finish faster than first-arrival + target/injection-capacity.
-        env = _env()
-        vessels, inj_cap, _cap, _term = extract_params(env)
-        target = 1_500.0
-        result = solve_min_makespan(env, target_t=target)
-        min_startup = min(v.startup_h for v in vessels)
-        lower_bound = min_startup + target / inj_cap
-        self.assertGreaterEqual(result.makespan_h + 1e-6, lower_bound)
-
-    def test_larger_target_takes_longer(self):
-        small = solve_min_makespan(_env(), target_t=800.0)
-        large = solve_min_makespan(_env(), target_t=2_400.0)
-        self.assertGreaterEqual(large.makespan_h, small.makespan_h)
-
-    def test_fixed_route_milp_cannot_borrow_capture_from_other_emitters(self):
-        result = solve_min_makespan(_unbalanced_source_env(), target_t=1_000.0)
-        self.assertEqual(result.status, "Optimal")
-        self.assertEqual(result.schedule["short_ship"], [])
-        self.assertEqual(result.schedule["long_ship"], [60])
-
     def test_fixed_horizon_maximizes_storage(self):
         result = milp_module.solve_max_storage_fixed_horizon(_env(), horizon_h=168)
         self.assertEqual(result.status, "Optimal")
@@ -127,12 +124,11 @@ class MilpTests(unittest.TestCase):
         self.assertGreater(result.deliveries, 0)
         self.assertGreater(result.operating_cost, 0.0)
 
-    def test_fixed_horizon_cannot_borrow_capture_from_other_emitters(self):
+    def test_fixed_horizon_can_pool_capture_under_flexible_emitter_actions(self):
         result = milp_module.solve_max_storage_fixed_horizon(_unbalanced_source_env(), horizon_h=120)
         self.assertEqual(result.status, "Optimal")
-        self.assertEqual(result.schedule["short_ship"], [])
-        self.assertEqual(len(result.schedule["long_ship"]), 1)
-        self.assertAlmostEqual(result.stored_t, 1_000.0)
+        self.assertGreater(len(result.schedule["short_ship"]), 0)
+        self.assertGreater(result.stored_t, 1_000.0)
 
     def test_fixed_horizon_scenario_capture_outage_limits_storage(self):
         env = _env(cap_hours=80)
@@ -153,6 +149,16 @@ class MilpTests(unittest.TestCase):
 
         self.assertEqual(result.status, "Optimal")
         self.assertAlmostEqual(result.stored_t, 0.0)
+
+    def test_fixed_horizon_scenario_unloads_over_time_into_small_terminal(self):
+        env = _streaming_unload_env()
+        scenario = _scenario_for_env(env, horizon_h=8, capture=0.0)
+        scenario.initial_inventory_t = {"source": 1_000.0}
+
+        result = milp_module.solve_max_storage_fixed_horizon(env, horizon_h=8, scenario=scenario)
+
+        self.assertEqual(result.status, "Optimal")
+        self.assertAlmostEqual(result.stored_t, 1_000.0)
 
 
 if __name__ == "__main__":

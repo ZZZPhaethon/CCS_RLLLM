@@ -20,7 +20,7 @@ class Phase1EnvTests(unittest.TestCase):
         self.assertEqual(len(env.vessel_ids), 4)       # four Phase 1 ships
         self.assertEqual(len(env.emitter_ids), 3)      # Brevik, Celsio, Yara
         self.assertEqual(len(env.well_ids), 2)         # two Aurora wells
-        self.assertEqual(env.action_dims, [3, 3, 3, 3, 4, 4])
+        self.assertEqual(env.action_dims, [5, 5, 5, 5, 5, 5])
 
     def test_routes_use_real_distances(self):
         # Yara (NL) -> Oygarden is far longer than Brevik (Norway) -> Oygarden.
@@ -34,10 +34,10 @@ class Phase1EnvTests(unittest.TestCase):
         obs = self.env.reset(seed=0)
         self.assertEqual(len(obs), self.env.observation_size)
 
-    def test_idle_episode_stores_nothing(self):
+    def test_idle_episode_only_runs_minimum_injection(self):
         metrics = run_episode(self.env, idle_policy, seed=1)
-        self.assertEqual(metrics.stored_t, 0.0)
-        self.assertEqual(metrics.storage_rate, 0.0)
+        self.assertGreater(metrics.stored_t, 0.0)
+        self.assertEqual(metrics.berth_wait_vessel_hours, 0)
 
     def test_shuttle_stores_co2_without_overflow_in_a_week(self):
         metrics = run_episode(self.env, greedy_shuttle_policy, seed=2)

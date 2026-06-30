@@ -173,7 +173,7 @@ from sim.environment.gym_adapter import CCSGymEnv
 
 扰动场景生成和运行时扰动解析。
 
-- `generator.py`：生成一个 episode 的时间序列扰动，例如 capture outage、天气、well maintenance、injectivity decline、berth outage。
+- `generator.py`：生成一个 episode 的时间序列扰动，例如 capture outage、天气、well maintenance、injectivity decline。
 - `disturbance_resolver.py`：运行时解析当前 step 的有效值。它不生成扰动，只负责“state 里有扰动覆盖值就用扰动值，否则回退到实体 nominal 值”。
 
 ### `src/sim/visualization/`
@@ -224,7 +224,7 @@ Phase 1 emitter capture-rate profile 数据和元数据。
 
 当前主要脚本：
 
-- `benchmark_phase1_yara_milp.py`：Phase 1 iso-storage MILP benchmark 和 policy comparison。
+- `benchmark_phase1_yara_milp.py`：Phase 1 fixed-horizon MILP benchmark 和 policy comparison。
 
 ### `hpc/`
 

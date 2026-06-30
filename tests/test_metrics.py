@@ -45,13 +45,14 @@ class RunEpisodeTests(unittest.TestCase):
         self.assertTrue(0.0 <= metrics.min_pressure_margin_fraction <= 1.0)
         self.assertGreaterEqual(metrics.longest_venting_streak_hours, 0)
 
-    def test_idle_policy_stores_nothing_and_vents(self):
-        # A long horizon guarantees the emitter buffers overflow under idling.
+    def test_idle_policy_runs_minimum_injection_and_vents(self):
+        # A long horizon guarantees the emitter buffers overflow under idling,
+        # while wells still drain any terminal inventory at their minimum rate.
         metrics = run_episode(_env(episode_hours=168), idle_policy, seed=5)
-        self.assertAlmostEqual(metrics.stored_t, 0.0)
-        self.assertEqual(metrics.storage_rate, 0.0)
+        self.assertGreater(metrics.stored_t, 0.0)
+        self.assertGreater(metrics.storage_rate, 0.0)
         self.assertGreater(metrics.vented_t, 0.0)
-        self.assertIsNone(metrics.cost_per_stored_t)
+        self.assertIsNotNone(metrics.cost_per_stored_t)
 
     def test_shuttle_beats_idle_on_storage(self):
         idle = run_episode(_env(episode_hours=168), idle_policy, seed=7)
@@ -89,41 +90,27 @@ class RunEpisodeTests(unittest.TestCase):
         self.assertLess(shuttle.backlog_growth_t, idle.backlog_growth_t)
 
 
-class GoalModeTests(unittest.TestCase):
-    def _goal_env(self, goal_t: float, cap_hours: int = 336):
-        return CCSEnv(
-            make_toy_two_source_network(),
-            TOY_TWO_SOURCE_LOCATIONS,
-            scenario_generator=ScenarioGenerator(config=ScenarioConfig(episode_hours=cap_hours)),
-            config=CCSEnvConfig(episode_hours=cap_hours, storage_goal_t=goal_t),
-        )
+class HorizonModeTests(unittest.TestCase):
+    def test_storage_goal_config_is_not_supported(self):
+        with self.assertRaises(TypeError):
+            CCSEnvConfig(episode_hours=72, storage_goal_t=2_000.0)
 
-    def test_reaching_goal_terminates_before_cap(self):
-        env = self._goal_env(goal_t=2_000.0, cap_hours=336)
+    def test_episode_runs_to_horizon_without_goal_termination(self):
+        env = _env(episode_hours=72)
         m = run_episode(env, greedy_shuttle_policy, seed=1)
-        self.assertTrue(m.reached_target)
-        self.assertGreaterEqual(m.stored_t, 2_000.0)
-        self.assertLess(m.elapsed_hours, 336)  # finished early
 
-    def test_unreachable_goal_runs_to_cap_without_terminating(self):
-        env = self._goal_env(goal_t=1e12, cap_hours=72)
-        m = run_episode(env, greedy_shuttle_policy, seed=1)
-        self.assertFalse(m.reached_target)
         self.assertEqual(m.elapsed_hours, 72)
+        self.assertFalse(hasattr(m, "reached_target"))
 
-    def test_idle_never_reaches_goal(self):
-        env = self._goal_env(goal_t=5_000.0, cap_hours=72)
-        m = run_episode(env, idle_policy, seed=1)
-        self.assertFalse(m.reached_target)
-
-    def test_goal_reached_is_a_true_termination(self):
-        env = self._goal_env(goal_t=2_000.0, cap_hours=336)
+    def test_step_end_is_time_limit_truncation(self):
+        env = _env(episode_hours=4)
         env.reset(seed=1)
         terminated = truncated = False
         while not (terminated or truncated):
             _o, _r, terminated, truncated, _i = env.step(greedy_shuttle_policy(env))
-        self.assertTrue(terminated)     # goal met -> genuine terminal
-        self.assertFalse(truncated)
+
+        self.assertFalse(terminated)
+        self.assertTrue(truncated)
 
 
 class AggregateTests(unittest.TestCase):
@@ -140,14 +127,15 @@ class AggregateTests(unittest.TestCase):
         self.assertEqual(summary["storage_rate"]["std"], 0.0)
 
     def test_aggregate_skips_none_valued_fields(self):
-        # idle policy yields cost_per_stored_t = None; aggregation must not crash.
-        summary = aggregate_metrics([run_episode(_env(), idle_policy, seed=1)])
+        # Empty/no-storage records yield cost_per_stored_t = None; aggregation must not crash.
+        summary = aggregate_metrics([EpisodeMetrics(cost_per_stored_t=None)])
         self.assertNotIn("cost_per_stored_t", summary)
 
     def test_report_renders_all_sections(self):
         text = run_episode(_env(), greedy_shuttle_policy, seed=2).report()
         for token in ("storage rate", "operating cost", "throttle hours", "pressure-risk"):
             self.assertIn(token, text)
+        self.assertNotIn("goal", text.lower())
 
 
 if __name__ == "__main__":

@@ -8,7 +8,6 @@ except ImportError:
     HAVE_PULP = False
 
 from sim.control.baselines import greedy_shuttle_policy
-from sim.control.milp import solve_min_makespan
 from sim.control.rolling_milp import RollingMilpController
 from sim.environment import CCSEnv, CCSEnvConfig
 from sim.metrics import run_episode
@@ -16,7 +15,7 @@ from sim.scenario_generation import ScenarioConfig, ScenarioGenerator
 from tests.fixtures.toy_networks import TOY_TWO_SOURCE_LOCATIONS, make_toy_two_source_network
 
 
-def _cold_env(goal_t: float, cap_hours: int = 600) -> CCSEnv:
+def _cold_env(cap_hours: int = 600) -> CCSEnv:
     # Cold start (no initial inventory) so the MILP bound and the controllers face
     # the same empty-system task.
     return CCSEnv(
@@ -25,59 +24,67 @@ def _cold_env(goal_t: float, cap_hours: int = 600) -> CCSEnv:
         scenario_generator=ScenarioGenerator(
             config=ScenarioConfig(episode_hours=cap_hours, randomize_initial_inventory=False)
         ),
-        config=CCSEnvConfig(episode_hours=cap_hours, storage_goal_t=goal_t),
+        config=CCSEnvConfig(episode_hours=cap_hours),
     )
 
 
 class RollingMilpInterfaceTests(unittest.TestCase):
-    def test_controller_accepts_progress_and_plan_target_options(self):
+    def test_controller_accepts_progress_and_lookahead_options(self):
         messages: list[str] = []
         progress = messages.append
         controller = RollingMilpController(
-            _cold_env(goal_t=1_600.0),
+            _cold_env(),
             progress=progress,
-            plan_target_t=800.0,
+            planning_horizon_h=96,
         )
-        self.assertEqual(controller.plan_target_t, 800.0)
+        self.assertEqual(controller.planning_horizon_h, 96)
         self.assertIs(controller.progress, progress)
 
 
 @unittest.skipUnless(HAVE_PULP, "pulp/CBC not installed")
 class RollingMilpTests(unittest.TestCase):
-    def test_controller_runs_and_reaches_goal(self):
-        env = _cold_env(goal_t=1_600.0)
+    def test_controller_runs_to_horizon_and_stores_co2(self):
+        env = _cold_env(cap_hours=96)
         controller = RollingMilpController(env, replan_every=12)
         metrics = run_episode(env, controller, seed=1)
-        self.assertTrue(metrics.reached_target)
-        self.assertGreaterEqual(metrics.stored_t, 1_600.0)
+        self.assertEqual(metrics.elapsed_hours, 96)
+        self.assertGreater(metrics.stored_t, 0.0)
 
     def test_controller_resets_between_episodes(self):
-        env = _cold_env(goal_t=1_600.0)
+        env = _cold_env(cap_hours=96)
         controller = RollingMilpController(env, replan_every=12)
-        a = run_episode(env, controller, seed=1).elapsed_hours
-        b = run_episode(env, controller, seed=1).elapsed_hours  # reused controller
+        a = run_episode(env, controller, seed=1).stored_t
+        b = run_episode(env, controller, seed=1).stored_t  # reused controller
         self.assertEqual(a, b)  # stale plan would make the second run differ
 
-    def test_respects_milp_lower_bound_when_nominal(self):
-        # On a cold, nominal run the controller cannot beat the open-loop optimum.
-        env = _cold_env(goal_t=1_600.0)
-        quiet = ScenarioConfig(
-            episode_hours=600, randomize_initial_inventory=False,
-            capture_noise_std=0.0, capture_outage_rate_per_week=0.0, enable_weather=False,
-            well_maintenance_rate_per_week=0.0, injectivity_max_decline=0.0,
-            injectivity_noise_std=0.0, berth_outage_rate_per_week=0.0,
-        )
-        env.scenario_generator = ScenarioGenerator(config=quiet)
-        bound = solve_min_makespan(env, target_t=1_600.0).makespan_h
-        metrics = run_episode(env, RollingMilpController(env, replan_every=12), seed=1)
-        self.assertGreaterEqual(metrics.elapsed_hours + 1e-6, bound)
-
-    def test_controller_uses_plan_target_when_storage_goal_is_unset(self):
-        env = _cold_env(goal_t=None)
+    def test_controller_uses_fixed_horizon_plan_without_storage_goal(self):
+        env = _cold_env(cap_hours=96)
         env.reset(seed=1)
-        controller = RollingMilpController(env, replan_every=12, plan_target_t=800.0)
+        controller = RollingMilpController(env, replan_every=12, planning_horizon_h=48)
         action = controller.policy(env)
         self.assertEqual(len(action), len(env.vessel_ids) + len(env.well_ids))
+
+    def test_empty_vessel_returns_to_best_available_emitter_not_fixed_home(self):
+        env = _cold_env(cap_hours=48)
+        env.reset(seed=1)
+        vessel_id = env.vessel_ids[0]
+        home = str(env._routes[vessel_id]["origin"])
+        other = next(eid for eid in env.emitter_ids if eid != home)
+        terminal = str(env._routes[vessel_id]["destination"])
+        env.simulator.state.vessel_berths[vessel_id] = terminal
+        env.simulator.vessel_states[vessel_id] = {
+            "mode": "berthed",
+            "berth": terminal,
+            "destination": None,
+            "progress": 0.0,
+        }
+        env.simulator.state.entity_inventory_t[vessel_id] = 0.0
+        env.simulator.state.entity_inventory_t[home] = 0.0
+        env.simulator.state.entity_inventory_t[other] = 5_000.0
+
+        action = RollingMilpController(env, replan_every=12, planning_horizon_h=48).policy(env)
+
+        self.assertEqual(action[0], env.vessel_go_emitter_action(other))
 
 
 if __name__ == "__main__":

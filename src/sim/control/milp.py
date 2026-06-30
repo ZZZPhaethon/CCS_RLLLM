@@ -1,19 +1,17 @@
-"""MILP benchmark: minimum time (and cost) to store a target amount of CO2.
+"""Fixed-horizon MILP benchmarks for CCS shipping and injection.
 
-This is the perfect-information, nominal-conditions optimum the research note
-(section 10) uses as a benchmark - the *best achievable* makespan for the
-iso-storage task "store T tonnes", against which heuristic and RL policies are
-measured. It is an idealized lower bound: the terminal is modelled as a fluid
-buffer and unloads as instantaneous deliveries, so the schedule is optimistic
-and not necessarily executable step-for-step in the simulator.
+This is a perfect-information benchmark for "store as much CO2 as possible in a
+given horizon", against which online controllers can be compared. It is an
+idealized upper bound: the terminal is modelled as a fluid buffer and unloads as
+scheduled deliveries, so the schedule is optimistic and not necessarily
+executable step-for-step in the simulator.
 
 Binding constraints captured (all derived from the same network the env uses):
 - injection capacity (pipeline / manifold / wells), the sustained-throughput cap;
 - single-berth unloading (one delivery per unload duration);
 - per-vessel round-trip cadence and first-arrival startup delay;
 - terminal buffer capacity;
-- source-specific capture inflow (fixed-route vessels cannot borrow CO2 from
-  other home emitters).
+- aggregate emitter capture inflow under flexible vessel-to-emitter assignment.
 
 Solved with PuLP + CBC.
 """
@@ -42,6 +40,7 @@ class VesselParams:
     capacity_t: float
     load_dur_h: int
     unload_dur_h: int
+    unloading_rate_tph: float
     sail_h: int
 
     @property
@@ -51,18 +50,6 @@ class VesselParams:
     @property
     def startup_h(self) -> int:
         return self.load_dur_h + self.sail_h
-
-
-@dataclass
-class MilpResult:
-    status: str
-    reached: bool
-    makespan_h: float
-    deliveries: int
-    operating_cost: float
-    cost_per_stored_t: float
-    target_t: float
-    schedule: dict[str, list[int]]  # vessel_id -> delivery completion hours
 
 
 @dataclass
@@ -100,117 +87,11 @@ def extract_params(env) -> tuple[list[VesselParams], float, float, float]:
                 capacity_t=vessel.capacity_t,
                 load_dur_h=math.ceil(vessel.capacity_t / vessel.loading_rate_tph),
                 unload_dur_h=math.ceil(vessel.capacity_t / vessel.unloading_rate_tph),
+                unloading_rate_tph=vessel.unloading_rate_tph,
                 sail_h=sail_h,
             )
         )
     return vessels, inj_cap, capture_rate, term_cap
-
-
-def _extract_source_rates(env) -> dict[str, float]:
-    return {
-        eid: emitter.nominal_capture_tph
-        for eid, emitter in env.network._entities_of_type(Emitter).items()
-    }
-
-
-def solve_min_makespan(
-    env,
-    target_t: float,
-    horizon_h: int | None = None,
-    economics: EconomicParameters | None = None,
-    initial_buffer_t: float = 0.0,
-    msg: bool = False,
-) -> MilpResult:
-    """Minimum makespan (and its cost) to safely store ``target_t`` tonnes."""
-    import pulp
-
-    params = economics or EconomicParameters()
-    vessels, inj_cap, capture_rate, term_cap = extract_params(env)
-    source_rates = _extract_source_rates(env)
-
-    if horizon_h is None:
-        startup_max = max(v.startup_h for v in vessels)
-        horizon_h = int(startup_max + math.ceil(target_t / inj_cap) + max(v.round_trip_h for v in vessels) + 30)
-    H = horizon_h
-    hours = range(H)
-
-    prob = pulp.LpProblem("min_makespan_to_target", pulp.LpMinimize)
-    d = {
-        (v.vessel_id, t): pulp.LpVariable(f"d_{v.vessel_id}_{t}", cat="Binary")
-        for v in vessels
-        for t in hours
-    }
-    inj = {t: pulp.LpVariable(f"inj_{t}", lowBound=0, upBound=inj_cap) for t in hours}
-    done = {t: pulp.LpVariable(f"done_{t}", cat="Binary") for t in hours}
-
-    # No delivery before a vessel could physically complete its first trip.
-    for v in vessels:
-        for t in hours:
-            if t < v.startup_h:
-                prob += d[(v.vessel_id, t)] == 0
-
-    # Per-vessel round-trip cadence: at most one delivery per round_trip window.
-    for v in vessels:
-        for t in hours:
-            window = [d[(v.vessel_id, k)] for k in range(t, min(t + v.round_trip_h, H))]
-            prob += pulp.lpSum(window) <= 1
-
-    # Single berth: at most one delivery (across all vessels) per unload duration.
-    unload_dur = max(v.unload_dur_h for v in vessels)
-    for t in hours:
-        window = [d[(v.vessel_id, k)] for v in vessels for k in range(t, min(t + unload_dur, H))]
-        prob += pulp.lpSum(window) <= 1
-
-    # Each fixed-route vessel can only use CO2 captured at its own home emitter.
-    for source_id, capture_tph in source_rates.items():
-        source_vessels = [v for v in vessels if v.source_id == source_id]
-        if not source_vessels:
-            continue
-        for t in hours:
-            loaded_by_t = [
-                v.capacity_t * d[(v.vessel_id, k)]
-                for v in source_vessels
-                for k in hours
-                if k - v.sail_h <= t
-            ]
-            prob += pulp.lpSum(loaded_by_t) <= capture_tph * t
-
-    # Cumulative balances.
-    for t in hours:
-        cum_deliv = pulp.lpSum(v.capacity_t * d[(v.vessel_id, k)] for v in vessels for k in range(t + 1))
-        cum_inj = pulp.lpSum(inj[k] for k in range(t + 1))
-        prob += cum_inj <= cum_deliv                                  # inject only what arrived
-        prob += cum_deliv - cum_inj <= term_cap                       # terminal buffer limit
-        prob += cum_deliv <= initial_buffer_t + capture_rate * (t + 1)  # capture inflow limit
-        prob += cum_inj >= target_t * done[t]                          # target reached flag
-        if t > 0:
-            prob += done[t] >= done[t - 1]                            # done stays done
-
-    # Maximize hours spent "done" == minimize makespan; tiny tie-break for fewer trips.
-    prob += (H - pulp.lpSum(done[t] for t in hours)) + 1e-4 * pulp.lpSum(d.values())
-    prob.solve(pulp.PULP_CBC_CMD(msg=1 if msg else 0))
-
-    status = pulp.LpStatus[prob.status]
-    done_count = sum(round(done[t].value() or 0) for t in hours)
-    reached = done_count > 0
-    makespan = float(H - done_count) if reached else float(H)
-    schedule = {
-        v.vessel_id: [t for t in hours if round(d[(v.vessel_id, t)].value() or 0) == 1]
-        for v in vessels
-    }
-    n_deliveries = sum(len(s) for s in schedule.values())
-
-    cost = _schedule_cost(vessels, schedule, makespan, target_t, params)
-    return MilpResult(
-        status=status,
-        reached=reached,
-        makespan_h=makespan,
-        deliveries=n_deliveries,
-        operating_cost=cost,
-        cost_per_stored_t=cost / target_t if target_t > 0 else float("nan"),
-        target_t=target_t,
-        schedule=schedule,
-    )
 
 
 def solve_max_storage_fixed_horizon(
@@ -241,7 +122,6 @@ def solve_max_storage_fixed_horizon(
         )
 
     vessels, inj_cap, capture_rate, term_cap = extract_params(env)
-    source_rates = _extract_source_rates(env)
     H = int(horizon_h)
     hours = range(H)
 
@@ -266,19 +146,6 @@ def solve_max_storage_fixed_horizon(
     for t in hours:
         window = [d[(v.vessel_id, k)] for v in vessels for k in range(t, min(t + unload_dur, H))]
         prob += pulp.lpSum(window) <= 1
-
-    for source_id, capture_tph in source_rates.items():
-        source_vessels = [v for v in vessels if v.source_id == source_id]
-        if not source_vessels:
-            continue
-        for t in hours:
-            loaded_by_t = [
-                v.capacity_t * d[(v.vessel_id, k)]
-                for v in source_vessels
-                for k in hours
-                if k - v.sail_h <= t
-            ]
-            prob += pulp.lpSum(loaded_by_t) <= capture_tph * t
 
     for t in hours:
         cum_deliv = pulp.lpSum(v.capacity_t * d[(v.vessel_id, k)] for v in vessels for k in range(t + 1))
@@ -391,31 +258,23 @@ def _solve_max_storage_fixed_horizon_with_scenario(
             prob += pulp.lpSum(active_unloads) <= berth_count_by_hour[t]
 
     by_id = {v.vessel_id: v for v in vessels}
-    for source_id in env.emitter_ids:
-        source_departures = [
-            key
-            for key in departures
-            if by_id[key[0]].source_id == source_id
-        ]
-        for t in hours:
-            loaded_by_t = [
-                by_id[key[0]].capacity_t * d[key]
-                for key in source_departures
-                if key[1] <= t
-            ]
-            prob += pulp.lpSum(loaded_by_t) <= source_supply[source_id][t]
-
+    unload_profiles = {v.vessel_id: _unload_profile(v) for v in vessels}
     for t in hours:
-        delivered_by_t = [
-            by_id[key[0]].capacity_t * d[key]
+        unloaded_by_t = [
+            _cumulative_unloaded_at(unload_profiles[key[0]], t - option["arrival_h"]) * d[key]
             for key, option in departures.items()
-            if option["arrival_h"] <= t
+            if t >= option["arrival_h"]
         ]
-        cum_deliv = pulp.lpSum(delivered_by_t)
+        loaded_by_t = [
+            by_id[key[0]].capacity_t * d[key]
+            for key in departures
+            if key[1] <= t
+        ]
+        cum_unload = pulp.lpSum(unloaded_by_t)
         cum_inj = pulp.lpSum(inj[k] for k in range(t + 1))
-        prob += cum_inj <= term_init_t + cum_deliv
-        prob += term_init_t + cum_deliv - cum_inj <= term_cap
-        prob += cum_deliv <= total_supply[t]
+        prob += cum_inj <= term_init_t + cum_unload
+        prob += term_init_t + cum_unload - cum_inj <= term_cap
+        prob += pulp.lpSum(loaded_by_t) <= total_supply[t]
 
     prob += pulp.lpSum(inj.values()) - 1e-4 * pulp.lpSum(d.values())
     prob.solve(
@@ -479,8 +338,8 @@ def _scenario_injection_cap(env, scenario: Scenario, t: int, nominal_inj_cap: fl
 
 def _scenario_berth_count(env, scenario: Scenario, t: int) -> int:
     return sum(
-        max(0, int(_scenario_series_value(scenario.berth_count_override, terminal_id, t, terminal.berth_count)))
-        for terminal_id, terminal in env.network._entities_of_type(Terminal).items()
+        max(0, int(terminal.berth_count))
+        for terminal in env.network._entities_of_type(Terminal).values()
     )
 
 
@@ -507,6 +366,22 @@ def _scenario_departure_options(
     return options
 
 
+def _unload_profile(vessel: VesselParams) -> list[float]:
+    profile = []
+    remaining = vessel.capacity_t
+    for _ in range(vessel.unload_dur_h):
+        amount = min(vessel.unloading_rate_tph, remaining)
+        profile.append(amount)
+        remaining -= amount
+    return profile
+
+
+def _cumulative_unloaded_at(profile: list[float], offset_h: int) -> float:
+    if offset_h < 0:
+        return 0.0
+    return sum(profile[: min(offset_h + 1, len(profile))])
+
+
 def _arrival_hour(env, scenario: Scenario, vessel_id: str, depart_h: int, horizon_h: int) -> int | None:
     route = env._routes[vessel_id]
     speed_knots = float(route["speed_knots"])
@@ -531,14 +406,14 @@ def _scenario_series_value(series_by_id, entity_id: str, t: int, default):
 def _schedule_cost(
     vessels: list[VesselParams],
     schedule: dict[str, list[int]],
-    makespan_h: float,
-    target_t: float,
+    horizon_h: float,
+    stored_t: float,
     params: EconomicParameters,
 ) -> float:
-    charter = len(vessels) * params.vessel_charter_eur_per_h * makespan_h
+    charter = len(vessels) * params.vessel_charter_eur_per_h * horizon_h
     sail_hours = sum(2 * v.sail_h * len(schedule[v.vessel_id]) for v in vessels)
     fuel = sail_hours * params.vessel_fuel_eur_per_h_sailing
     handled_t = sum(2 * v.capacity_t * len(schedule[v.vessel_id]) for v in vessels)
     handling = handled_t * params.handling_eur_per_t
-    injection = target_t * params.injection_cost_eur_per_t
+    injection = stored_t * params.injection_cost_eur_per_t
     return charter + fuel + handling + injection

@@ -27,9 +27,7 @@ class EpisodeMetrics:
 
     horizon_hours: float = 0.0
     storage_target_rate: float = 0.0
-    # Iso-storage / goal-mode outcomes.
     elapsed_hours: float = 0.0      # wall-clock simulated hours actually run
-    reached_target: bool = False    # whether the storage goal was met within the cap
 
     # Mass-flow KPIs (tonnes).
     captured_t: float = 0.0
@@ -64,14 +62,9 @@ class EpisodeMetrics:
         return asdict(self)
 
     def report(self) -> str:
-        goal_line = (
-            f"  goal reached         : {self.reached_target} in {self.elapsed_hours:.0f} h"
-            if self.reached_target or self.elapsed_hours < self.horizon_hours
-            else f"  ran                  : {self.elapsed_hours:.0f} h (goal not reached)"
-        )
         lines = [
             f"Episode ({self.horizon_hours:.0f} h cap, target {self.storage_target_rate:.0%})",
-            goal_line,
+            f"  ran                  : {self.elapsed_hours:.0f} h",
             f"  stored               : {self.stored_t:,.0f} t  (of {self.captured_t:,.0f} t captured)",
             f"  vented (lost)        : {self.vented_t:,.0f} t   loss rate {self.loss_rate:.2%}",
             f"  in-transit backlog   : {self.in_transit_t:,.0f} t   "
@@ -168,12 +161,10 @@ class _MetricsRecorder:
         in_transit = env._backlog()
         annual_gap_t = max(0.0, env.config.storage_target_rate * captured - stored)
         cost_per_stored = ledger.operating_cost / stored if stored > _EPS else None
-        goal = env.config.storage_goal_t
         return EpisodeMetrics(
             horizon_hours=env.n_steps * env.network.time_step_hours,
             storage_target_rate=env.config.storage_target_rate,
             elapsed_hours=env.t * env.network.time_step_hours,
-            reached_target=goal is not None and stored >= goal,
             captured_t=captured,
             stored_t=stored,
             vented_t=ledger.vented_t,
@@ -221,15 +212,15 @@ def evaluate(
     return episodes, aggregate_metrics(episodes)
 
 
-def format_iso_storage(name_to_summary: dict[str, dict[str, dict[str, float]]]) -> str:
-    """Render an iso-storage comparison: time and cost to reach the same goal."""
-    header = f"{'policy':16} {'reached':>8} {'hours':>8} {'op cost EUR':>14} {'EUR/t':>9} {'vented t':>10}"
+def format_fixed_horizon(name_to_summary: dict[str, dict[str, dict[str, float]]]) -> str:
+    """Render a fixed-horizon comparison: stored tonnes, loss, and cost."""
+    header = f"{'policy':16} {'hours':>8} {'stored t':>10} {'op cost EUR':>14} {'EUR/t':>9} {'vented t':>10}"
     lines = [header, "-" * len(header)]
     for name, s in name_to_summary.items():
-        reached = s["reached_target"]["mean"]
         eur_per_t = s["cost_per_stored_t"]["mean"] if "cost_per_stored_t" in s else float("nan")
         lines.append(
-            f"{name:16} {reached * 100:7.0f}% {s['elapsed_hours']['mean']:8.0f} "
+            f"{name:16} {s['elapsed_hours']['mean']:8.0f} "
+            f"{s['stored_t']['mean']:10,.0f} "
             f"{s['operating_cost']['mean']:14,.0f} {eur_per_t:9,.1f} "
             f"{s['vented_t']['mean']:10,.0f}"
         )
@@ -243,7 +234,7 @@ def aggregate_metrics(episodes: list[EpisodeMetrics]) -> dict[str, dict[str, flo
     summary: dict[str, dict[str, float]] = {}
     sample = episodes[0].as_dict()
     for key, value in sample.items():
-        # Booleans aggregate as a fraction (e.g. reached_target -> success rate).
+        # Booleans aggregate as fractions when a future KPI needs that treatment.
         if not isinstance(value, (int, float, bool)):
             continue
         values = [float(getattr(ep, key)) for ep in episodes if getattr(ep, key) is not None]

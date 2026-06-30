@@ -13,7 +13,7 @@ class ControllerComparisonExperimentTests(unittest.TestCase):
         factories = compare.controller_factories(
             replan_every=12,
             progress=lambda _message: None,
-            rolling_plan_target_t=800.0,
+            rolling_planning_horizon_h=96,
         )
         self.assertEqual(set(factories), {"idle", "greedy_shuttle", "rule_based", "rolling_milp"})
 
@@ -25,10 +25,9 @@ class ControllerComparisonExperimentTests(unittest.TestCase):
         factories = compare.controller_factories(
             replan_every=12,
             progress=lambda _message: None,
-            rolling_plan_target_t=None,
+            rolling_planning_horizon_h=48,
         )
         env = compare.make_env(
-            target_t=None,
             cap_hours=2,
             scenario_seed_config=ScenarioConfig(episode_hours=2, randomize_initial_inventory=False),
         )
@@ -38,7 +37,7 @@ class ControllerComparisonExperimentTests(unittest.TestCase):
 
         self.assertEqual(len(action), len(env.action_dims))
         self.assertEqual(action[: len(env.vessel_ids)], [VESSEL_WAIT] * len(env.vessel_ids))
-        self.assertEqual(action[len(env.vessel_ids):], [WELL_ACTIONS - 1, 0])
+        self.assertEqual(action[len(env.vessel_ids):], [WELL_ACTIONS - 1, 1])
 
     def test_controller_comparison_cli_smoke_writes_outputs(self):
         from experiments import compare_controllers_same_scenarios as compare
@@ -62,7 +61,7 @@ class ControllerComparisonExperimentTests(unittest.TestCase):
 
             self.assertTrue((output_dir / "controller_comparison_by_seed.csv").exists())
             self.assertTrue((output_dir / "controller_comparison_summary.csv").exists())
-            self.assertTrue((output_dir / "static_milp_nominal_benchmark.csv").exists())
+            self.assertTrue((output_dir / "static_milp_same_scenario_benchmark.csv").exists())
             self.assertTrue((output_dir / "controller_comparison_report.md").exists())
 
     def test_static_milp_time_limit_default_is_long_enough_for_fixed_horizon_runs(self):
@@ -80,8 +79,6 @@ class ControllerComparisonExperimentTests(unittest.TestCase):
             output_dir = Path(tmpdir)
             argv = [
                 "compare_controllers_same_scenarios.py",
-                "--mode",
-                "fixed-horizon",
                 "--controllers",
                 "idle",
                 "--seeds",
@@ -154,6 +151,15 @@ class ControllerComparisonExperimentTests(unittest.TestCase):
         self.assertEqual(solve.call_args.kwargs["mip_gap_rel"], 0.01)
         self.assertEqual(solve.call_args.kwargs["mip_gap_abs"], 100.0)
         self.assertEqual(solve.call_args.kwargs["scenario"].seed, 7)
+
+    def test_fixed_target_cli_options_are_removed(self):
+        from experiments import compare_controllers_same_scenarios as compare
+
+        with (
+            patch.object(sys, "argv", ["compare_controllers_same_scenarios.py", "--mode", "fixed-target"]),
+            self.assertRaises(SystemExit),
+        ):
+            compare.parse_args()
 
 
 if __name__ == "__main__":

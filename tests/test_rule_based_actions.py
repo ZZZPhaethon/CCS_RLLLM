@@ -62,13 +62,15 @@ class RuleBasedActionGeneratorTests(unittest.TestCase):
         self.assertEqual(actions["northern_pioneer"]["sail_to"], {"destination_id": "oygarden_terminal"})
         self.assertNotIn("load_vessel", actions.get("brevik", {}))
 
-    def test_empty_vessel_at_terminal_returns_to_home_emitter(self):
+    def test_empty_vessel_at_terminal_sails_to_best_buffered_emitter(self):
         self.state.vessel_berths["northern_pioneer"] = "oygarden_terminal"
         self.state.entity_inventory_t["northern_pioneer"] = 0.0
+        self.state.entity_inventory_t["brevik"] = 0.0
+        self.state.entity_inventory_t["celsio"] = 5_000.0
 
         actions = self._actions_by_entity()
 
-        self.assertEqual(actions["northern_pioneer"]["sail_to"], {"destination_id": "brevik"})
+        self.assertEqual(actions["northern_pioneer"]["sail_to"], {"destination_id": "celsio"})
 
     def test_loaded_vessel_at_terminal_unloads_and_pipeline_uses_one_well(self):
         self.state.vessel_berths["northern_pioneer"] = "oygarden_terminal"

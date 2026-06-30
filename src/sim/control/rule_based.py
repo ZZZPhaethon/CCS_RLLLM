@@ -19,10 +19,10 @@ class RuleBasedActionGenerator:
 
     Rules:
     - keep every emitter at full utilization;
-    - load a berthed, not-full vessel at its fixed home emitter;
+    - load a berthed, not-full vessel at whichever emitter it is serving;
     - send full vessels to the terminal;
     - unload loaded vessels at the terminal;
-    - send empty vessels at the terminal back to their fixed home emitter;
+    - send empty vessels to the emitter with the most available buffer;
     - use one injection well and never proactively shut wells.
     """
 
@@ -68,7 +68,6 @@ class RuleBasedActionGenerator:
             route = self.routes.get(vessel_id)
             if not route:
                 continue
-            home_emitter_id = str(route["origin"])
             terminal_id = str(route["destination"])
             berth_id = state.vessel_berths.get(vessel_id)
             if berth_id is None:
@@ -80,16 +79,39 @@ class RuleBasedActionGenerator:
 
             if berth_id == terminal_id:
                 if is_empty:
-                    proposals.append(self._proposal(vessel_id, "sail_to", {"destination_id": home_emitter_id}))
+                    emitter_id = self._best_emitter_id(state)
+                    if emitter_id is not None:
+                        proposals.append(self._proposal(vessel_id, "sail_to", {"destination_id": emitter_id}))
                 elif self._is_fifo_unload_head(terminal_id, vessel_id):
                     proposals.append(self._proposal(terminal_id, "unload_vessel", {"vessel_id": vessel_id}))
                 continue
 
             if is_full:
                 proposals.append(self._proposal(vessel_id, "sail_to", {"destination_id": terminal_id}))
-            elif berth_id == home_emitter_id:
-                proposals.append(self._proposal(home_emitter_id, "load_vessel", {"vessel_id": vessel_id}))
+            elif isinstance(self.network.entities.get(berth_id), Emitter):
+                if self._emitter_supply_score(state, berth_id) > 1e-9:
+                    proposals.append(self._proposal(berth_id, "load_vessel", {"vessel_id": vessel_id}))
+                else:
+                    emitter_id = self._best_emitter_id(state, exclude=berth_id)
+                    if emitter_id is not None:
+                        proposals.append(self._proposal(vessel_id, "sail_to", {"destination_id": emitter_id}))
         return proposals
+
+    def _best_emitter_id(self, state: PhysicalState, *, exclude: str | None = None) -> str | None:
+        best: tuple[float, str] | None = None
+        for emitter_id, entity in self.network.entities.items():
+            if not isinstance(entity, Emitter) or emitter_id == exclude:
+                continue
+            score = self._emitter_supply_score(state, emitter_id)
+            if best is None or score > best[0]:
+                best = (score, emitter_id)
+        return None if best is None else best[1]
+
+    def _emitter_supply_score(self, state: PhysicalState, emitter_id: str) -> float:
+        emitter = self.network.entities[emitter_id]
+        assert isinstance(emitter, Emitter)
+        availability = state.emitter_availability.get(emitter_id, emitter.availability)
+        return state.entity_inventory_t.get(emitter_id, 0.0) + emitter.nominal_capture_tph * max(0.0, availability)
 
     def _update_terminal_unload_queues(self, state: PhysicalState) -> None:
         terminal_ids = [
