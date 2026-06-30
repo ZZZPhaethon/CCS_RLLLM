@@ -124,7 +124,7 @@ class DisturbancePhysicsTests(unittest.TestCase):
         self.assertAlmostEqual(result.state.entity_inventory_t["well_1"], 100.0)
         self.assertAlmostEqual(result.state.last_injection_flow_tph["well_1"], 100.0)
 
-    def test_berth_outage_limits_concurrent_unloads(self):
+    def test_manual_berth_override_limits_concurrent_unloads(self):
         network = PhysicalNetwork(time_step_hours=1.0)
         network.add_entity(Vessel("ship_1", capacity_t=800.0, loading_rate_tph=800.0, unloading_rate_tph=300.0))
         network.add_entity(Vessel("ship_2", capacity_t=800.0, loading_rate_tph=800.0, unloading_rate_tph=300.0))
@@ -149,7 +149,7 @@ class DisturbancePhysicsTests(unittest.TestCase):
         both = cargo_after_unload(2)
         self.assertEqual(sum(c < 800.0 for c in both.values()), 2)
 
-        # A one-berth outage lets only a single vessel unload.
+        # A one-berth override lets only a single vessel unload.
         one = cargo_after_unload(1)
         self.assertEqual(sum(c < 800.0 for c in one.values()), 1)
 

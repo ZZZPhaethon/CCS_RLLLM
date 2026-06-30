@@ -15,13 +15,14 @@ and the action space is a small ``MultiDiscrete`` described by
 :attr:`CCSEnv.action_dims`; wrapping it for SB3/gymnasium later is trivial.
 
 Controls (section 7.2 of the research note):
-- per vessel: ``WAIT`` / ``GO_HOME`` / ``GO_TERMINAL``;
-- per well: ``OFF`` / ``LOW`` / ``MEDIUM`` / ``HIGH`` injection mode.
+- per vessel: ``WAIT`` / ``GO_TERMINAL`` / ``GO_EMITTER[id]``;
+- per well: ``OFF`` during maintenance, otherwise 0.5 / 1.0 / 1.5 / 2.0 Mt/y.
 
-Loading at the home emitter and unloading at the terminal are issued
-automatically (they are never the interesting decision); the agent chooses where
-to send vessels and how hard to inject. An action mask exposes which choices are
-physically legal so the policy only selects feasible actions (section 7.3).
+Loading at any emitter berth and unloading at the terminal are issued
+automatically (they are never the interesting decision); the agent chooses which
+emitter or terminal to send vessels to and how hard to inject. An action mask
+exposes which choices are physically legal so the policy only selects feasible
+actions (section 7.3).
 """
 
 from __future__ import annotations
@@ -41,13 +42,18 @@ from ..routes import route_distance_km, sea_route
 from ..scenario_generation import Scenario, ScenarioGenerator
 from ..simulator import PhysicalSimulator
 
-# Vessel action ids.
-VESSEL_WAIT, VESSEL_GO_HOME, VESSEL_GO_TERMINAL = 0, 1, 2
-VESSEL_ACTIONS = 3
+# Vessel action ids. Emitter actions are dynamic:
+# VESSEL_GO_EMITTER_BASE + env.emitter_ids.index(emitter_id).
+VESSEL_WAIT, VESSEL_GO_TERMINAL = 0, 1
+VESSEL_GO_EMITTER_BASE = 2
+VESSEL_ACTIONS = VESSEL_GO_EMITTER_BASE
 
-# Well injection modes mapped to a fraction of nominal max injection.
-WELL_MODE_FRACTIONS = (0.0, 0.34, 0.67, 1.0)
-WELL_ACTIONS = len(WELL_MODE_FRACTIONS)
+# Well injection modes are expressed in Mt/y. OFF is only legal while a well is
+# under maintenance; otherwise the action mask enforces the 0.5 Mt/y minimum.
+WELL_MODE_RATES_MTPA = (0.0, 0.5, 1.0, 1.5, 2.0)
+WELL_MODE_FRACTIONS = WELL_MODE_RATES_MTPA
+WELL_ACTIONS = len(WELL_MODE_RATES_MTPA)
+_MTPA_TO_TPH = 1_000_000.0 / (365.25 * 24.0)
 
 Coordinate = tuple[float, float]
 
@@ -58,11 +64,6 @@ class CCSEnvConfig:
     storage_target_rate: float = 0.9
     reward_scale: float = 1e-3
     default_speed_knots: float = 12.0
-    # Goal mode: if set, the episode genuinely terminates once this many tonnes
-    # have been safely stored. This turns the episode into an iso-storage task -
-    # "store T tonnes, how long and at what cost?" - and makes goal-reaching a
-    # true `terminated` (not a time-limit truncation). episode_hours is the cap.
-    storage_goal_t: float | None = None
 
 
 class CCSEnv:
@@ -113,7 +114,16 @@ class CCSEnv:
     # -- spaces -----------------------------------------------------------
     @property
     def action_dims(self) -> list[int]:
-        return [VESSEL_ACTIONS] * len(self.vessel_ids) + [WELL_ACTIONS] * len(self.well_ids)
+        return [self.vessel_action_count] * len(self.vessel_ids) + [WELL_ACTIONS] * len(self.well_ids)
+
+    @property
+    def vessel_action_count(self) -> int:
+        return VESSEL_GO_EMITTER_BASE + len(self.emitter_ids)
+
+    def vessel_go_emitter_action(self, emitter_id: str) -> int:
+        if emitter_id not in self.emitter_ids:
+            raise ValueError(f"Unknown emitter: {emitter_id}")
+        return VESSEL_GO_EMITTER_BASE + self.emitter_ids.index(emitter_id)
 
     @property
     def observation_size(self) -> int:
@@ -128,7 +138,8 @@ class CCSEnv:
         for eid in self.emitter_ids:
             names += [f"{eid}.fill", f"{eid}.capture_norm", f"{eid}.availability"]
         for vid in self.vessel_ids:
-            names += [f"{vid}.cargo", f"{vid}.berthed", f"{vid}.at_home", f"{vid}.at_terminal", f"{vid}.progress"]
+            names += [f"{vid}.cargo", f"{vid}.berthed", f"{vid}.at_terminal", f"{vid}.progress"]
+            names += [f"{vid}.at_{eid}" for eid in self.emitter_ids]
         for tid in self.terminal_ids:
             names += [f"{tid}.fill", f"{tid}.berth_frac"]
         for wid in self.well_ids:
@@ -197,13 +208,10 @@ class CCSEnv:
         reward = (economics.net - backlog_penalty) * self.config.reward_scale
 
         self.t += 1
-        # Without a goal the operation never truly "ends" - reaching the horizon is
-        # a time limit (truncation), not a terminal state, so terminated stays False
-        # and the trainer bootstraps V(s_T). In goal mode, storing the target amount
-        # IS a genuine terminal (the task is done), so terminated becomes True.
-        goal = self.config.storage_goal_t
-        terminated = goal is not None and self.cumulative_stored_t >= goal
-        truncated = (not terminated) and self.t >= self.n_steps
+        # The operational task is fixed-horizon: there is no early terminal
+        # condition, so the episode only ends through the time-limit truncation.
+        terminated = False
+        truncated = self.t >= self.n_steps
         if not (terminated or truncated):
             self._apply_disturbances()
 
@@ -257,17 +265,18 @@ class CCSEnv:
         vstate = self.simulator.vessel_states[vessel_id]
         route = self._routes[vessel_id]
         if vstate["mode"] != "berthed":
-            return [True, False, False]  # mid-voyage: can only WAIT
+            return [True] + [False] * (self.vessel_action_count - 1)  # mid-voyage: can only WAIT
         berth = vstate["berth"]
-        at_home = berth == route["origin"]
         at_terminal = berth == route["destination"]
-        return [True, not at_home, not at_terminal]
+        mask = [True, not at_terminal]
+        mask.extend(berth != emitter_id for emitter_id in self.emitter_ids)
+        return mask
 
     def _well_mask(self, well_id: str) -> list[bool]:
         available = self.simulator.state.well_available.get(well_id, True)
         if not available:
             return [True] + [False] * (WELL_ACTIONS - 1)  # maintenance: only OFF
-        return [True] * WELL_ACTIONS
+        return [False] + [True] * (WELL_ACTIONS - 1)
 
     # -- action translation ----------------------------------------------
     def _build_proposals(self, action: list[int]) -> list[ActionProposal]:
@@ -291,17 +300,25 @@ class CCSEnv:
             vstate = self.simulator.vessel_states[vessel_id]
             if vstate["mode"] != "berthed":
                 continue
-            route = self._routes[vessel_id]
             berth = vstate["berth"]
-            destination = None
-            if choice == VESSEL_GO_HOME and berth != route["origin"]:
-                destination = route["origin"]
-            elif choice == VESSEL_GO_TERMINAL and berth != route["destination"]:
-                destination = route["destination"]
+            destination = self._vessel_action_destination(vessel_id, choice)
+            if destination == berth:
+                destination = None
             if destination is not None:
                 proposals.append(self._proposal(vessel_id, "sail_to", {"destination_id": destination}))
                 departing.add(vessel_id)
+
         return departing
+
+    def _vessel_action_destination(self, vessel_id: str, choice: int) -> str | None:
+        if choice == VESSEL_WAIT:
+            return None
+        if choice == VESSEL_GO_TERMINAL:
+            return str(self._routes[vessel_id]["destination"])
+        emitter_index = choice - VESSEL_GO_EMITTER_BASE
+        if 0 <= emitter_index < len(self.emitter_ids):
+            return self.emitter_ids[emitter_index]
+        return None
 
     def _auto_loading_proposals(self, proposals, departing) -> None:
         loaded_emitters: set[str] = set()
@@ -309,15 +326,14 @@ class CCSEnv:
             if vessel_id in departing:
                 continue
             vstate = self.simulator.vessel_states[vessel_id]
-            route = self._routes[vessel_id]
-            home = route["origin"]
-            if vstate["mode"] != "berthed" or vstate["berth"] != home or home in loaded_emitters:
+            emitter_id = vstate["berth"]
+            if vstate["mode"] != "berthed" or emitter_id not in self.emitter_ids or emitter_id in loaded_emitters:
                 continue
             vessel = self.network.entities[vessel_id]
             cargo = self.simulator.state.entity_inventory_t.get(vessel_id, 0.0)
             if cargo < vessel.capacity_t - 1e-9:
-                proposals.append(self._proposal(home, "load_vessel", {"vessel_id": vessel_id}))
-                loaded_emitters.add(home)
+                proposals.append(self._proposal(emitter_id, "load_vessel", {"vessel_id": vessel_id}))
+                loaded_emitters.add(emitter_id)
 
     def _auto_unloading_proposals(self, proposals, departing) -> None:
         for terminal_id in self.terminal_ids:
@@ -327,7 +343,7 @@ class CCSEnv:
 
     def _terminal_unload_head(self, terminal_id: str, departing) -> str | None:
         candidates = []
-        for vessel_id in self.network._upstream_of_type(terminal_id, Vessel):
+        for vessel_id in self.vessel_ids:
             if vessel_id in departing:
                 continue
             if self.simulator.state.vessel_berths.get(vessel_id) != terminal_id:
@@ -339,10 +355,12 @@ class CCSEnv:
     def _injection_proposals(self, well_actions, proposals) -> None:
         desired: dict[str, float] = {}
         for well_id, choice in zip(self.well_ids, well_actions):
-            well = self.network.entities[well_id]
             available = self.simulator.state.well_available.get(well_id, True)
-            fraction = WELL_MODE_FRACTIONS[choice] if available else 0.0
-            desired[well_id] = fraction * well.max_injection_tph
+            if not available:
+                desired[well_id] = 0.0
+                continue
+            mode = max(1, min(int(choice), WELL_ACTIONS - 1))
+            desired[well_id] = WELL_MODE_RATES_MTPA[mode] * _MTPA_TO_TPH
 
         for pipeline_id in self.network._entities_of_type(Pipeline):
             wells = self._pipeline_wells(pipeline_id)
@@ -384,13 +402,14 @@ class CCSEnv:
             vstate = self.simulator.vessel_states[vid]
             route = self._routes[vid]
             berthed = vstate["mode"] == "berthed"
+            berth = vstate["berth"] if berthed else None
             obs += [
                 _safe_div(state.entity_inventory_t.get(vid, 0.0), vessel.capacity_t),
                 1.0 if berthed else 0.0,
-                1.0 if berthed and vstate["berth"] == route["origin"] else 0.0,
-                1.0 if berthed and vstate["berth"] == route["destination"] else 0.0,
+                1.0 if berthed and berth == route["destination"] else 0.0,
                 float(vstate["progress"]),
             ]
+            obs += [1.0 if berthed and berth == emitter_id else 0.0 for emitter_id in self.emitter_ids]
         for tid in self.terminal_ids:
             terminal = self.network.entities[tid]
             berth_override = state.berth_count_override.get(tid, terminal.berth_count)

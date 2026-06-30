@@ -2,7 +2,7 @@
 
 A :class:`Scenario` is the exogenous part of an episode: randomized initial
 conditions plus per-hour trajectories for capture availability, weather speed
-factors, well maintenance, injectivity decline and berth outages. It writes the
+factors, well maintenance and injectivity decline. It writes the
 current step's values into :class:`PhysicalState`; it never chooses actions.
 
 Runtime operations read those values through
@@ -56,10 +56,6 @@ class ScenarioConfig:
     injectivity_floor: float = 0.3
     injectivity_noise_std: float = 0.01
 
-    # Terminal berth outages.
-    berth_outage_rate_per_week: float = 0.3
-    berth_outage_mean_hours: float = 12.0
-
     # Initial-condition randomization (fraction-of-capacity ranges).
     randomize_initial_inventory: bool = True
     emitter_initial_fill_range: tuple[float, float] = (0.0, 0.5)
@@ -86,7 +82,6 @@ class Scenario:
     vessel_speed_factor: dict[str, list[float]] = field(default_factory=dict)
     well_available: dict[str, list[bool]] = field(default_factory=dict)
     injectivity_factor: dict[str, list[float]] = field(default_factory=dict)
-    berth_count_override: dict[str, list[int]] = field(default_factory=dict)
     seed: int | None = None
 
     def step_index(self, time_h: float) -> int:
@@ -106,7 +101,6 @@ class Scenario:
         state.vessel_speed_factor = {k: v[i] for k, v in self.vessel_speed_factor.items()}
         state.well_available = {k: v[i] for k, v in self.well_available.items()}
         state.injectivity_factor = {k: v[i] for k, v in self.injectivity_factor.items()}
-        state.berth_count_override = {k: v[i] for k, v in self.berth_count_override.items()}
 
 
 class ScenarioGenerator:
@@ -125,7 +119,6 @@ class ScenarioGenerator:
         weather_rng = random.Random(master.random())
         maintenance_rng = random.Random(master.random())
         injectivity_rng = random.Random(master.random())
-        berth_rng = random.Random(master.random())
         init_rng = random.Random(master.random())
 
         dt = config.time_step_hours
@@ -162,13 +155,6 @@ class ScenarioGenerator:
             injectivity_factor[well_id] = _injectivity_series(
                 injectivity_rng, n_steps, config, start_level=start_level
             )
-        berth_count_override = {
-            terminal_id: _berth_series(
-                berth_rng, n_steps, dt, terminal.berth_count, config,
-            )
-            for terminal_id, terminal in terminals.items()
-        }
-
         initial_inventory_t = self._initial_inventory(
             network, init_rng, emitters, terminals, reservoirs
         )
@@ -181,7 +167,6 @@ class ScenarioGenerator:
             vessel_speed_factor=vessel_speed_factor,
             well_available=well_available,
             injectivity_factor=injectivity_factor,
-            berth_count_override=berth_count_override,
             seed=episode_seed,
         )
 
@@ -288,8 +273,3 @@ def _injectivity_series(
     return series
 
 
-def _berth_series(rng, n_steps: int, dt: float, berth_count: int, config: ScenarioConfig) -> list[int]:
-    outage = _outage_series(
-        rng, n_steps, dt, config.berth_outage_rate_per_week, config.berth_outage_mean_hours
-    )
-    return [max(0, berth_count - 1) if is_out else berth_count for is_out in outage]

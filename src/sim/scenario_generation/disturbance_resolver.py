@@ -54,6 +54,6 @@ def vessel_speed_factor(state: PhysicalState, vessel_id: str) -> float:
 
 
 def terminal_berth_count(state: PhysicalState, terminal: Terminal) -> int:
-    """Number of usable berths after any outage override."""
+    """Number of usable berths after any explicit state override."""
     value = state.berth_count_override.get(terminal.entity_id, terminal.berth_count)
     return max(0, int(value))

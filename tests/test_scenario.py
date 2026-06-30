@@ -36,7 +36,6 @@ def _quiet_config(**overrides) -> ScenarioConfig:
         well_maintenance_rate_per_week=0.0,
         injectivity_max_decline=0.0,
         injectivity_noise_std=0.0,
-        berth_outage_rate_per_week=0.0,
         randomize_initial_inventory=False,
     )
     base.update(overrides)
@@ -53,7 +52,6 @@ class ScenarioGeneratorTests(unittest.TestCase):
         self.assertEqual(a.vessel_speed_factor, b.vessel_speed_factor)
         self.assertEqual(a.injectivity_factor, b.injectivity_factor)
         self.assertEqual(a.well_available, b.well_available)
-        self.assertEqual(a.berth_count_override, b.berth_count_override)
 
     def test_different_seeds_diverge(self):
         network = _network()
@@ -68,7 +66,6 @@ class ScenarioGeneratorTests(unittest.TestCase):
         self.assertEqual(set(scenario.emitter_availability), {"brevik", "oslo"})
         self.assertEqual(set(scenario.well_available), {"well_1", "well_2"})
         self.assertEqual(set(scenario.vessel_speed_factor), {"ship_1"})
-        self.assertEqual(set(scenario.berth_count_override), {"oygarden"})
         for series in scenario.emitter_availability.values():
             self.assertEqual(len(series), 168)
 
@@ -79,7 +76,6 @@ class ScenarioGeneratorTests(unittest.TestCase):
         self.assertTrue(all(v == 1.0 for s in scenario.vessel_speed_factor.values() for v in s))
         self.assertTrue(all(v == 1.0 for s in scenario.injectivity_factor.values() for v in s))
         self.assertTrue(all(av for s in scenario.well_available.values() for av in s))
-        self.assertTrue(all(b == 2 for s in scenario.berth_count_override.values() for b in s))
         self.assertEqual(scenario.initial_inventory_t, {})
 
     def test_disturbance_values_stay_in_physical_bounds(self):
@@ -91,8 +87,6 @@ class ScenarioGeneratorTests(unittest.TestCase):
             self.assertTrue(all(0.3 <= v <= 1.0 for v in series))
         for series in scenario.vessel_speed_factor.values():
             self.assertTrue(all(0.0 < v <= 1.0 for v in series))
-        for series in scenario.berth_count_override.values():
-            self.assertTrue(all(0 <= b <= 2 for b in series))
 
     def test_capture_noise_fluctuates_around_profile_by_default(self):
         network = _network()
@@ -127,7 +121,6 @@ class ScenarioGeneratorTests(unittest.TestCase):
         config = ScenarioConfig()
         self.assertEqual(config.capture_outage_mean_hours, 12.0)
         self.assertEqual(config.well_maintenance_mean_hours, 12.0)
-        self.assertEqual(config.berth_outage_mean_hours, 12.0)
 
 
 class WarmStartTests(unittest.TestCase):
@@ -169,7 +162,6 @@ class ScenarioApplyTests(unittest.TestCase):
             vessel_speed_factor={"ship_1": [1.0, 0.6, 0.6]},
             well_available={"well_1": [True, True, False]},
             injectivity_factor={"well_1": [1.0, 0.9, 0.8]},
-            berth_count_override={"oygarden": [2, 1, 2]},
         )
 
     def test_apply_initial_sets_starting_inventory(self):
@@ -184,7 +176,6 @@ class ScenarioApplyTests(unittest.TestCase):
         self.assertEqual(state.emitter_availability["brevik"], 0.0)
         self.assertEqual(state.vessel_speed_factor["ship_1"], 0.6)
         self.assertTrue(state.well_available["well_1"])
-        self.assertEqual(state.berth_count_override["oygarden"], 1)
 
     def test_step_index_clamps_past_the_horizon(self):
         scenario = self._scenario()

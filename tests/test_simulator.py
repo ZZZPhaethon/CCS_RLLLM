@@ -1,7 +1,7 @@
 import unittest
 
 from sim.actions import ActionFrame, ActionProposal
-from sim.entities import InjectionWell, PhysicalState, Pipeline, Terminal, Vessel
+from sim.entities import Emitter, InjectionWell, PhysicalState, Pipeline, Terminal, Vessel
 from sim.network import PhysicalNetwork
 from sim.simulator import PhysicalSimulator
 
@@ -87,6 +87,50 @@ class PhysicalSimulatorTests(unittest.TestCase):
         )
 
         self.assertEqual(record.step_result.state.vessel_berths["ship_1"], "terminal")
+        self.assertTrue(record.vessel_positions["ship_1"]["at_berth"])
+
+    def test_sail_to_can_target_a_non_home_emitter(self):
+        network = PhysicalNetwork(time_step_hours=1.0)
+        network.add_entity(Emitter("source_a", nominal_capture_tph=0.0, buffer_capacity_t=1_000.0))
+        network.add_entity(Emitter("source_b", nominal_capture_tph=0.0, buffer_capacity_t=1_000.0))
+        network.add_entity(Vessel("ship_1", capacity_t=800.0, loading_rate_tph=800.0, unloading_rate_tph=800.0, speed_knots=1000.0))
+        network.add_entity(Terminal("terminal", storage_capacity_t=1_000.0, berth_count=1))
+        state = PhysicalState(vessel_berths={"ship_1": "source_a"})
+        simulator = PhysicalSimulator(
+            network,
+            state,
+            routes={
+                "ship_1": {
+                    "origin": "source_a",
+                    "destination": "terminal",
+                    "distance_km": 1.0,
+                    "speed_knots": 1000.0,
+                    "coordinates": [(0.0, 0.0), (0.0, 1.0)],
+                    "return_coordinates": [(0.0, 1.0), (0.0, 0.0)],
+                }
+            },
+            locations={
+                "source_a": (0.0, 0.0),
+                "source_b": (0.0, 0.1),
+                "terminal": (0.0, 1.0),
+            },
+        )
+
+        record = simulator.step(
+            ActionFrame(
+                time_h=0.0,
+                proposals=[
+                    ActionProposal(
+                        agent_id="ship_agent",
+                        entity_id="ship_1",
+                        verb="sail_to",
+                        params={"destination_id": "source_b"},
+                    )
+                ],
+            )
+        )
+
+        self.assertEqual(record.step_result.state.vessel_berths["ship_1"], "source_b")
         self.assertTrue(record.vessel_positions["ship_1"]["at_berth"])
 
     def test_step_record_preserves_proposed_committed_and_executed_actions(self):

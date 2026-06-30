@@ -1,10 +1,10 @@
 import unittest
 
 from sim.environment import (
-    VESSEL_GO_HOME,
     VESSEL_GO_TERMINAL,
     VESSEL_WAIT,
     WELL_ACTIONS,
+    WELL_MODE_RATES_MTPA,
     CCSEnv,
     CCSEnvConfig,
 )
@@ -24,7 +24,8 @@ def _env(**config) -> CCSEnv:
 class EnvSpaceTests(unittest.TestCase):
     def test_action_and_observation_dimensions(self):
         env = _env()
-        self.assertEqual(env.action_dims, [3, 3, WELL_ACTIONS, WELL_ACTIONS])  # 2 vessels, 2 wells
+        self.assertEqual(env.action_dims, [4, 4, WELL_ACTIONS, WELL_ACTIONS])  # 2 vessels, 2 emitters, 2 wells
+        self.assertEqual(WELL_MODE_RATES_MTPA, (0.0, 0.5, 1.0, 1.5, 2.0))
         obs = env.reset(seed=0)
         self.assertEqual(len(obs), env.observation_size)
         self.assertEqual(len(obs), len(env.feature_names))
@@ -42,11 +43,22 @@ class EnvSpaceTests(unittest.TestCase):
 
 
 class EnvDynamicsTests(unittest.TestCase):
-    def test_vessels_start_home_and_can_only_go_to_terminal_or_wait(self):
+    def test_vessels_start_at_emitters_and_can_choose_terminal_or_other_emitters(self):
         env = _env()
         env.reset(seed=0)
-        for i, _vid in enumerate(env.vessel_ids):
-            self.assertEqual(env.action_mask()[i], [True, False, True])  # WAIT, not GO_HOME, GO_TERMINAL
+        source_a_action = env.vessel_go_emitter_action("source_a")
+        source_b_action = env.vessel_go_emitter_action("source_b")
+
+        vessel_a_mask = env.action_mask()[env.vessel_ids.index("vessel_a")]
+        vessel_b_mask = env.action_mask()[env.vessel_ids.index("vessel_b")]
+
+        self.assertTrue(vessel_a_mask[VESSEL_WAIT])
+        self.assertTrue(vessel_a_mask[VESSEL_GO_TERMINAL])
+        self.assertFalse(vessel_a_mask[source_a_action])
+        self.assertTrue(vessel_a_mask[source_b_action])
+        self.assertTrue(vessel_b_mask[VESSEL_GO_TERMINAL])
+        self.assertTrue(vessel_b_mask[source_a_action])
+        self.assertFalse(vessel_b_mask[source_b_action])
 
     def test_sailing_vessel_can_only_wait(self):
         env = _env()
@@ -55,14 +67,56 @@ class EnvDynamicsTests(unittest.TestCase):
         env.step(action)
         # Both ships are now sailing -> mask permits WAIT only.
         for i in range(len(env.vessel_ids)):
-            self.assertEqual(env.action_mask()[i], [True, False, False])
+            self.assertEqual(env.action_mask()[i], [True, False, False, False])
 
-    def test_well_maintenance_masks_all_but_off(self):
+    def test_well_actions_are_stable_rate_modes_with_off_only_for_maintenance(self):
         env = _env()
         env.reset(seed=0)
         well_index = len(env.vessel_ids)  # first well dim
+        self.assertEqual(env.action_mask()[well_index], [False, True, True, True, True])
+
         env.simulator.state.well_available[env.well_ids[0]] = False
         self.assertEqual(env.action_mask()[well_index], [True] + [False] * (WELL_ACTIONS - 1))
+
+    def test_lowest_available_well_rate_injects_half_mtpa_per_year(self):
+        env = _env()
+        env.reset(seed=0)
+        terminal_id = env.terminal_ids[0]
+        reservoir_id = env.reservoir_ids[0]
+        env.simulator.state.entity_inventory_t[terminal_id] = 1_000.0
+        before = env.simulator.state.entity_inventory_t.get(reservoir_id, 0.0)
+
+        low_rate_action = WELL_MODE_RATES_MTPA.index(0.5)
+        env.step([VESSEL_WAIT, VESSEL_WAIT, low_rate_action, low_rate_action])
+
+        expected_per_well_tph = 0.5 * 1_000_000.0 / (365.25 * 24.0)
+        after = env.simulator.state.entity_inventory_t.get(reservoir_id, 0.0)
+        self.assertAlmostEqual(after - before, 2 * expected_per_well_tph)
+
+    def test_vessel_can_milk_run_between_emitters_before_terminal(self):
+        env = _env()
+        env.reset(seed=0)
+        vessel_id = "vessel_a"
+        vessel = env.network.entities[vessel_id]
+        env.simulator.state.entity_inventory_t["source_a"] = 200.0
+        env.simulator.state.entity_inventory_t["source_b"] = 1_000.0
+        env.simulator.state.entity_inventory_t[vessel_id] = 0.0
+        env.simulator.state.entity_inventory_t["vessel_b"] = env.network.entities["vessel_b"].capacity_t
+        env._routes[vessel_id]["speed_knots"] = 10_000.0
+
+        low_rate_action = WELL_MODE_RATES_MTPA.index(0.5)
+        env.step([VESSEL_WAIT, VESSEL_WAIT, low_rate_action, low_rate_action])
+        first_load_t = env.simulator.state.entity_inventory_t[vessel_id]
+        expected_first_load_t = 200.0 + env.simulator.state.last_capture_tph["source_a"]
+        self.assertAlmostEqual(first_load_t, expected_first_load_t)
+
+        env.step([env.vessel_go_emitter_action("source_b"), VESSEL_WAIT, low_rate_action, low_rate_action])
+        self.assertEqual(env.simulator.state.vessel_berths[vessel_id], "source_b")
+
+        env.step([VESSEL_WAIT, VESSEL_WAIT, low_rate_action, low_rate_action])
+        final_load_t = env.simulator.state.entity_inventory_t[vessel_id]
+        self.assertGreater(final_load_t, first_load_t)
+        self.assertLessEqual(final_load_t, vessel.capacity_t)
 
     def test_episode_runs_to_done(self):
         env = _env()
@@ -116,8 +170,6 @@ class EnvDynamicsTests(unittest.TestCase):
                 mask = env.action_mask()[i]
                 if mask[VESSEL_GO_TERMINAL]:
                     action.append(VESSEL_GO_TERMINAL)
-                elif mask[VESSEL_GO_HOME]:
-                    action.append(VESSEL_GO_HOME)
                 else:
                     action.append(VESSEL_WAIT)
             action += [WELL_ACTIONS - 1] * len(env.well_ids)  # wells HIGH

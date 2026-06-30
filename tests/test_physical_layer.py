@@ -419,6 +419,20 @@ class PhysicalLayerTests(unittest.TestCase):
         self.assertAlmostEqual(result.state.entity_inventory_t["brevik"], 400.0)
         self.assertAlmostEqual(result.state.entity_inventory_t["ship_1"], 300.0)
 
+    def test_any_emitter_can_load_any_berthed_vessel_for_milk_runs(self):
+        network = PhysicalNetwork(time_step_hours=1.0)
+        network.add_entity(Emitter("emitter_a", nominal_capture_tph=0.0, buffer_capacity_t=1_000.0, loading_rate_tph=500.0))
+        network.add_entity(Emitter("emitter_b", nominal_capture_tph=0.0, buffer_capacity_t=1_000.0, loading_rate_tph=500.0))
+        network.add_entity(Vessel("ship_1", capacity_t=800.0, loading_rate_tph=300.0, unloading_rate_tph=800.0))
+        network.connect("emitter_a", "ship_1")
+        state = PhysicalState(entity_inventory_t={"emitter_b": 700.0}, vessel_berths={"ship_1": "emitter_b"})
+
+        result = network.step(state, actions={"emitter_b": {"load_vessel": "ship_1"}})
+
+        self.assertAlmostEqual(result.flows_t[("emitter_b", "ship_1")], 300.0)
+        self.assertAlmostEqual(result.state.entity_inventory_t["emitter_b"], 400.0)
+        self.assertAlmostEqual(result.state.entity_inventory_t["ship_1"], 300.0)
+
     def test_capture_and_loading_update_emitter_buffer_in_same_step(self):
         network = PhysicalNetwork(time_step_hours=1.0)
         network.add_entity(

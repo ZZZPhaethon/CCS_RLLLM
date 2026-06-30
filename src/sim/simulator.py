@@ -134,15 +134,24 @@ class PhysicalSimulator:
             state = self.vessel_states[vessel_id]
             if not destination or state["mode"] != "berthed" or destination == state["berth"]:
                 continue
-            if destination not in {route["origin"], route["destination"]}:
+            if not self._known_destination(str(destination), route):
                 continue
+            origin = str(state["berth"])
+            destination = str(destination)
+            coordinates = self._route_coordinates_for_leg(route, origin, destination)
+            distance_km = (
+                float(route.get("distance_km") or 0.0)
+                if {origin, destination} == {route["origin"], route["destination"]}
+                else route_distance_km(coordinates)
+            )
             state.update(
                 {
                     "mode": "sailing",
-                    "origin": state["berth"],
+                    "origin": origin,
                     "destination": destination,
                     "berth": None,
                     "progress": 0.0,
+                    "distance_km": distance_km,
                 }
             )
 
@@ -152,7 +161,7 @@ class PhysicalSimulator:
                 continue
             route = self.routes[vessel_id]
             speed_knots = route.get("speed_knots")
-            distance_km = float(route.get("distance_km") or 0.0)
+            distance_km = float(state.get("distance_km") or route.get("distance_km") or 0.0)
             speed_factor = vessel_speed_factor(self.state, vessel_id)
             effective_speed_knots = float(speed_knots) * speed_factor if speed_knots else 0.0
             if effective_speed_knots <= 0.0 or distance_km <= 0.0:
@@ -169,8 +178,12 @@ class PhysicalSimulator:
                         "berth": state["destination"],
                         "origin": state["destination"],
                         "progress": 0.0,
+                        "distance_km": 0.0,
                     }
                 )
+
+    def _known_destination(self, destination: str, route: dict[str, Any]) -> bool:
+        return destination in self.locations or destination in {route["origin"], route["destination"]}
 
     def _vessel_berths_from_states(self) -> dict[str, str]:
         return {

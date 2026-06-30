@@ -147,7 +147,7 @@ s_(t+1) = f(s_t, a_t, ξ_t)
 - 各 emitter 的 capture-rate trajectory；
 - capture plant 降负荷或临时停机；
 - 天气状态及对应的航速/航行时间影响；
-- terminal berth outage 或卸货泵效率下降；
+- terminal unload efficiency change；
 - 船舶延误或临时不可用；
 - well maintenance；
 - injectivity decline；

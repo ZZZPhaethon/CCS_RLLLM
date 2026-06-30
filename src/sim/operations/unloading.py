@@ -42,7 +42,7 @@ def project_terminal_unload(
     vessel_ids = _terminal_vessels_for_action(network, terminal, state, actions)
     requested_t = _terminal_unload_requested_t(network, terminal, state, actions)
     if not vessel_ids and requested_t > 0:
-        upstream_vessels = network._upstream_of_type(terminal.entity_id, Vessel)
+        upstream_vessels = list(network._entities_of_type(Vessel))
         requested_vessel_id = _requested_unload_vessel_id(terminal.entity_id, actions)
         violation_entity_id = (
             requested_vessel_id
@@ -96,7 +96,7 @@ def _terminal_vessels_for_action(
     state: PhysicalState,
     actions: dict[str, dict[str, object]],
 ) -> list[str]:
-    vessel_ids = network._upstream_of_type(terminal.entity_id, Vessel)
+    vessel_ids = list(network._entities_of_type(Vessel))
     berthed_vessel_ids = _vessels_berthed_at(vessel_ids, state, terminal.entity_id)
     requested_vessel_id = _requested_unload_vessel_id(terminal.entity_id, actions)
     berth_count = terminal_berth_count(state, terminal)
