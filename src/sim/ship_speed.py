@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 KNOT_TO_MPS = 0.514444
@@ -83,3 +84,34 @@ def speed_mps(significant_wave_height_m: float, parameters: ShipSpeedParameters)
 def speed_knots(significant_wave_height_m: float, parameters: ShipSpeedParameters) -> float:
     """计算给定显著波高下的船速，结果单位为节。"""
     return mps_to_knots(speed_mps(significant_wave_height_m, parameters))
+
+
+def speed_factor(
+    significant_wave_height_m: float,
+    parameters: ShipSpeedParameters,
+    *,
+    nominal_speed_knots: float | None = None,
+) -> float:
+    """Return the simulator speed multiplier implied by significant wave height.
+
+    ``PhysicalSimulator`` already consumes weather as a multiplier on the route's
+    nominal speed. This helper bridges STAwave-1 absolute speed to that existing
+    ``vessel_speed_factor`` interface.
+    """
+    reference_speed_knots = parameters.design_speed_knots if nominal_speed_knots is None else nominal_speed_knots
+    if reference_speed_knots <= 0.0:
+        raise ValueError("reference speed must be positive")
+    return max(0.0, speed_knots(significant_wave_height_m, parameters) / reference_speed_knots)
+
+
+def speed_factor_series(
+    significant_wave_heights_m: Iterable[float],
+    parameters: ShipSpeedParameters,
+    *,
+    nominal_speed_knots: float | None = None,
+) -> list[float]:
+    """Convert an hourly significant-wave-height trajectory to speed factors."""
+    return [
+        speed_factor(height_m, parameters, nominal_speed_knots=nominal_speed_knots)
+        for height_m in significant_wave_heights_m
+    ]
