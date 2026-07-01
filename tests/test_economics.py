@@ -33,13 +33,35 @@ def _priced_network() -> PhysicalNetwork:
 
 
 class EconomicParameterTests(unittest.TestCase):
-    def test_injection_cost_combines_energy_and_storage_opex(self):
+    def test_defaults_match_simplified_cost_boundary(self):
         params = EconomicParameters()
-        # 120 kWh/t * 0.06 EUR/kWh + 5 EUR/t = 12.2 EUR/t.
-        self.assertAlmostEqual(params.injection_cost_eur_per_t, 12.2)
+        self.assertAlmostEqual(params.carbon_price_eur_per_t, 80.0)
+        self.assertAlmostEqual(params.ship_fuel_cost_hfo_eur_per_t, 600.0)
+        self.assertAlmostEqual(params.main_engine_fuel_use_kg_per_kwh, 0.148)
+        self.assertAlmostEqual(params.main_engine_power_kw, 5500.0)
+        self.assertAlmostEqual(params.cruise_power_fraction, 0.85)
+        self.assertAlmostEqual(params.hoteling_power_fraction, 0.05)
+        self.assertAlmostEqual(params.conditioning_eur_per_t, 7.82)
+        self.assertAlmostEqual(params.reconditioning_eur_per_t, 0.41)
+        self.assertFalse(hasattr(params, "backlog_penalty_eur_per_t"))
 
-    def test_as_dict_exposes_derived_injection_cost(self):
-        self.assertIn("injection_cost_eur_per_t", EconomicParameters().as_dict())
+    def test_fuel_hourly_rates_are_derived_from_ship_energy_inputs(self):
+        params = EconomicParameters()
+        expected_sailing = 5500.0 * 0.85 * 0.148 / 1000.0 * 600.0
+        expected_hoteling = 5500.0 * 0.05 * 0.148 / 1000.0 * 600.0
+        self.assertAlmostEqual(params.vessel_fuel_eur_per_h_sailing, expected_sailing)
+        self.assertAlmostEqual(params.hoteling_fuel_eur_per_h, expected_hoteling)
+
+    def test_as_dict_exposes_simplified_rates(self):
+        data = EconomicParameters().as_dict()
+        self.assertIn("ship_fuel_cost_hfo_eur_per_t", data)
+        self.assertIn("vessel_fuel_eur_per_h_sailing", data)
+        self.assertIn("hoteling_fuel_eur_per_h", data)
+        self.assertIn("conditioning_eur_per_t", data)
+        self.assertNotIn("backlog_penalty_eur_per_t", data)
+        self.assertNotIn("injection_cost_eur_per_t", data)
+        self.assertNotIn("loading_eur_per_t", data)
+        self.assertNotIn("unloading_eur_per_t", data)
 
 
 class CostModelStepTests(unittest.TestCase):
@@ -64,32 +86,45 @@ class CostModelStepTests(unittest.TestCase):
 
     def test_step_breakdown_matches_calibrated_rates(self):
         econ = self.model.evaluate_step(self.network, self._step_result())
+        params = EconomicParameters()
 
-        self.assertAlmostEqual(econ.vessel_charter, 2 * 800.0)   # both vessels in service
-        self.assertAlmostEqual(econ.vessel_fuel, 1 * 600.0)      # only ship_2 sailing
-        self.assertAlmostEqual(econ.handling, (50.0 + 30.0) * 0.7)
-        self.assertAlmostEqual(econ.injection, 100.0 * 12.2)
-        self.assertAlmostEqual(econ.vent_penalty, 10.0 * 75.0)
-        self.assertAlmostEqual(econ.revenue_storage, 100.0 * 40.0)
+        self.assertAlmostEqual(econ.vessel_fuel, params.vessel_fuel_eur_per_h_sailing)      # only ship_2 sailing
+        self.assertAlmostEqual(econ.conditioning, 50.0 * 7.82)
+        self.assertAlmostEqual(econ.reconditioning, 100.0 * 0.41)
+        self.assertAlmostEqual(econ.loading, (50.0 / 800.0) * params.hoteling_fuel_eur_per_h)
+        self.assertAlmostEqual(econ.unloading, (30.0 / 800.0) * params.hoteling_fuel_eur_per_h)
+        self.assertAlmostEqual(econ.vent_penalty, 10.0 * 80.0)
+        self.assertNotIn("revenue_storage", econ.as_dict())
         self.assertAlmostEqual(econ.stored_t, 100.0)
         self.assertAlmostEqual(econ.vented_t, 10.0)
+        self.assertAlmostEqual(econ.conditioned_t, 50.0)
+        self.assertAlmostEqual(econ.reconditioned_t, 100.0)
+        self.assertAlmostEqual(econ.loaded_t, 50.0)
+        self.assertAlmostEqual(econ.unloaded_t, 30.0)
         self.assertAlmostEqual(econ.handled_t, 80.0)
 
-    def test_net_is_revenue_minus_costs_and_penalties(self):
+    def test_net_is_negative_costs_and_penalties(self):
         econ = self.model.evaluate_step(self.network, self._step_result())
-        expected_operating = 1600.0 + 600.0 + 56.0 + 1220.0
+        params = EconomicParameters()
+        expected_operating = (
+            params.vessel_fuel_eur_per_h_sailing
+            + 391.0
+            + 41.0
+            + (50.0 / 800.0) * params.hoteling_fuel_eur_per_h
+            + (30.0 / 800.0) * params.hoteling_fuel_eur_per_h
+        )
         self.assertAlmostEqual(econ.operating_cost, expected_operating)
-        self.assertAlmostEqual(econ.total_cost, expected_operating + 750.0)
-        self.assertAlmostEqual(econ.net, 4000.0 - (expected_operating + 750.0))
+        self.assertAlmostEqual(econ.total_cost, expected_operating + 800.0)
+        self.assertAlmostEqual(econ.net, -(expected_operating + 800.0))
 
     def test_time_step_scales_time_based_costs(self):
         network = _priced_network()
         network.time_step_hours = 2.0
         econ = CostModel().evaluate_step(network, self._step_result())
-        # Charter, fuel and tonnage (rate * 2 h) all double.
-        self.assertAlmostEqual(econ.vessel_charter, 2 * 800.0 * 2.0)
-        self.assertAlmostEqual(econ.vessel_fuel, 1 * 600.0 * 2.0)
+        # Fuel and rate-derived storage tonnage double.
+        self.assertAlmostEqual(econ.vessel_fuel, 1 * EconomicParameters().vessel_fuel_eur_per_h_sailing * 2.0)
         self.assertAlmostEqual(econ.stored_t, 200.0)
+        self.assertAlmostEqual(econ.reconditioning, 200.0 * 0.41)
 
 
 class ShortfallPenaltyTests(unittest.TestCase):
@@ -116,15 +151,26 @@ class ShortfallPenaltyTests(unittest.TestCase):
 class EconomicLedgerTests(unittest.TestCase):
     def test_ledger_accumulates_steps(self):
         ledger = EconomicLedger()
-        ledger.add(StepEconomics(injection=12.2, revenue_storage=40.0, stored_t=1.0))
-        ledger.add(StepEconomics(injection=12.2, revenue_storage=40.0, stored_t=1.0, vent_penalty=75.0, vented_t=1.0))
+        ledger.add(StepEconomics(conditioning=7.82, reconditioning=0.41, loading=1.0, unloading=2.0, stored_t=1.0))
+        ledger.add(
+            StepEconomics(
+                conditioning=7.82,
+                reconditioning=0.41,
+                loading=1.0,
+                unloading=2.0,
+                stored_t=1.0,
+                vent_penalty=80.0,
+                vented_t=1.0,
+            )
+        )
         ledger.storage_shortfall_penalty = 500.0
 
         self.assertAlmostEqual(ledger.stored_t, 2.0)
         self.assertAlmostEqual(ledger.vented_t, 1.0)
-        self.assertAlmostEqual(ledger.operating_cost, 24.4)
-        self.assertAlmostEqual(ledger.total_cost, 24.4 + 75.0 + 500.0)
-        self.assertAlmostEqual(ledger.net, 80.0 - (24.4 + 75.0 + 500.0))
+        self.assertNotIn("revenue_storage", ledger.as_dict())
+        self.assertAlmostEqual(ledger.operating_cost, 22.46)
+        self.assertAlmostEqual(ledger.total_cost, 22.46 + 80.0 + 500.0)
+        self.assertAlmostEqual(ledger.net, -(22.46 + 80.0 + 500.0))
 
 
 if __name__ == "__main__":

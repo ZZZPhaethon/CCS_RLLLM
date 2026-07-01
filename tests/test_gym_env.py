@@ -4,7 +4,7 @@ try:
     import numpy as np
     import gymnasium  # noqa: F401
 
-    from sim.environment.gym_adapter import CCSGymEnv, flat_action_mask
+    from sim.environment.gym_adapter import CCSGymEnv, flat_vessel_action_mask
     HAVE_GYM = True
 except ImportError:
     HAVE_GYM = False
@@ -28,7 +28,8 @@ def _gym_env() -> "CCSGymEnv":
 class GymWrapperTests(unittest.TestCase):
     def test_spaces_match_native_env(self):
         env = _gym_env()
-        self.assertEqual(list(env.action_space.nvec), env.env.action_dims)
+        self.assertEqual(list(env.action_space["vessels"].nvec), env.env.vessel_action_dims)
+        self.assertEqual(env.action_space["wells"].shape, (len(env.env.well_ids),))
         self.assertEqual(env.observation_space.shape, (env.env.observation_size,))
 
     def test_reset_returns_array_and_info(self):
@@ -38,11 +39,11 @@ class GymWrapperTests(unittest.TestCase):
         self.assertEqual(obs.dtype, np.float32)
         self.assertIsInstance(info, dict)
 
-    def test_action_masks_flatten_in_multidiscrete_order(self):
+    def test_vessel_action_masks_flatten_in_multidiscrete_order(self):
         env = _gym_env()
         env.reset(seed=0)
         masks = env.action_masks()
-        self.assertEqual(masks.shape, (sum(env.env.action_dims),))
+        self.assertEqual(masks.shape, (sum(env.env.vessel_action_dims),))
         self.assertEqual(masks.dtype, bool)
 
     def test_step_returns_five_tuple_with_truncation(self):
@@ -51,15 +52,18 @@ class GymWrapperTests(unittest.TestCase):
         terminated = truncated = False
         steps = 0
         while not (terminated or truncated):
-            legal = [0] * len(env.env.action_dims)  # all-zero is always legal
+            legal = {
+                "vessels": np.zeros(len(env.env.vessel_ids), dtype=np.int64),
+                "wells": np.zeros(len(env.env.well_ids), dtype=np.float32),
+            }
             _obs, reward, terminated, truncated, _info = env.step(legal)
             steps += 1
         self.assertFalse(terminated)
         self.assertTrue(truncated)
         self.assertEqual(steps, env.env.n_steps)
 
-    def test_flat_action_mask_helper(self):
-        flat = flat_action_mask([[True, False, True], [True, True]])
+    def test_flat_vessel_action_mask_helper(self):
+        flat = flat_vessel_action_mask([[True, False, True], [True, True]])
         self.assertEqual(list(flat), [True, False, True, True, True])
 
 

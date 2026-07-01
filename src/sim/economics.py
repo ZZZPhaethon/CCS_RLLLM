@@ -1,104 +1,102 @@
 """Operational cost model for the ship-based CCS network.
 
-The research treats the infrastructure as fixed (capital is sunk), so this module
-prices only *operational* flows: vessel charter and fuel while sailing, cargo
-handling, injection energy, geological storage opex, the economic loss from
-venting, and the revenue from permanently stored CO2. It is deliberately
-decoupled from the physics: it reads a :class:`StepResult` (plus the network for
-entity typing) and returns a per-step economic breakdown, so the same model
-feeds both the RL reward (section 8 of the research note) and the evaluation
-KPIs (section 13).
-
-Default rates are calibrated to publicly reported 2026 figures for the Northern
-Lights value chain; see the project notes for sources. They are intentionally
-held in a plain dataclass so a ScenarioGenerator can randomise them per episode
-(fuel-price / carbon-price uncertainty, section 6.1).
+The current research model keeps only the variable costs that are directly tied
+to short-horizon operating decisions: sailing fuel, source-side CO2
+conditioning, terminal-side reconditioning, loading/unloading hoteling fuel,
+and the carbon value of vented CO2. Storage shortfall is retained as the
+storage-obligation signal rather than a market price.
 """
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 
 from .entities.emitter import Emitter
-from .entities.state import PhysicalState, StepResult
-from .entities.storage import InjectionWell
+from .entities.pipeline import Pipeline
+from .entities.state import StepResult
 from .entities.terminal import Terminal
 from .entities.vessel import Vessel
 
 
 @dataclass(frozen=True)
 class EconomicParameters:
-    """Operational cost/revenue rates in EUR (capex excluded).
-
-    Defaults reflect 2026 Northern Lights-scale figures:
-    - EU ETS price ~EUR 60-95/t (used as the venting loss basis);
-    - Northern Lights T&S tariff ~EUR 35-50/t (storage revenue);
-    - ~7,500 m3 LCO2 carrier charter/fuel order of magnitude;
-    - CO2 compression ~100-200 kWh/t at ~EUR 0.06/kWh Norwegian power;
-    - offshore storage technical opex ~EUR 2-20/t.
-    """
+    """Variable operational rates in EUR (capex and bundled tariffs excluded)."""
 
     currency: str = "EUR"
 
-    # Carbon value and storage revenue.
-    ets_price_eur_per_t: float = 75.0
-    storage_tariff_eur_per_t: float = 40.0
+    # Carbon value used to price vented/lost CO2.
+    carbon_price_eur_per_t: float = 80.0
 
-    # Vessels (time-based opex).
-    vessel_charter_eur_per_h: float = 800.0
-    vessel_fuel_eur_per_h_sailing: float = 600.0
+    # Ship fuel assumptions from the trip-cost fuel calculation. The legacy
+    # field name is kept for compatibility; defaults now use the Northern Lights
+    # Wartsila 31DF LNG/gas-mode baseline.
+    ship_fuel_cost_hfo_eur_per_t: float = 600.0
+    main_engine_fuel_use_kg_per_kwh: float = 0.148
+    main_engine_power_kw: float = 5500.0
+    cruise_power_fraction: float = 0.85
+    hoteling_power_fraction: float = 0.05
 
-    # Cargo handling. EUR 5,000 per port call over a ~7,500 t parcel each way is
-    # ~EUR 0.7/t handled; modelled per-tonne so the step cost is well defined.
-    handling_eur_per_t: float = 0.7
+    # Source-side conditioning before ship export. Default is the 15 bar case;
+    # use 8.45 for the 7 bar case when running that scenario.
+    conditioning_eur_per_t: float = 7.82
 
-    # Injection energy and storage.
-    compression_kwh_per_t: float = 120.0
-    electricity_eur_per_kwh: float = 0.06
-    storage_opex_eur_per_t: float = 5.0
+    # Terminal-side adjustment to pipeline/injection conditions.
+    reconditioning_eur_per_t: float = 0.41
 
-    # Penalties (constraints priced above pure cost, section 8).
-    vent_penalty_eur_per_t: float = 75.0
+    # Feasibility penalties, not market prices.
     # Annual storage-target shortfall: only meaningful over a long (>= multi-month)
     # horizon, where in-transit CO2 is negligible. Used by storage_shortfall_penalty.
     storage_shortfall_eur_per_t: float = 100.0
-    # Backlog (in-transit, captured-but-not-yet-stored) growth price. This is the
-    # horizon-appropriate short-episode signal: it penalizes the fleet/injection
-    # falling behind capture, without mislabelling recoverable in-transit CO2 as a
-    # contractual miss. Modest because backlog is recoverable, unlike vented CO2.
-    backlog_penalty_eur_per_t: float = 20.0
 
     @property
-    def injection_cost_eur_per_t(self) -> float:
-        """All-in cost to inject and store one tonne (energy + storage opex)."""
-        return self.compression_kwh_per_t * self.electricity_eur_per_kwh + self.storage_opex_eur_per_t
+    def vessel_fuel_eur_per_h_sailing(self) -> float:
+        return self.main_engine_fuel_cost_eur(self.cruise_power_fraction, hours=1.0)
+
+    @property
+    def hoteling_fuel_eur_per_h(self) -> float:
+        return self.main_engine_fuel_cost_eur(self.hoteling_power_fraction, hours=1.0)
+
+    def main_engine_fuel_cost_eur(self, power_fraction: float, hours: float) -> float:
+        fuel_t = (
+            self.main_engine_power_kw
+            * max(0.0, power_fraction)
+            * max(0.0, hours)
+            * self.main_engine_fuel_use_kg_per_kwh
+            / 1000.0
+        )
+        return fuel_t * self.ship_fuel_cost_hfo_eur_per_t
 
     def as_dict(self) -> dict[str, object]:
         data = asdict(self)
-        data["injection_cost_eur_per_t"] = self.injection_cost_eur_per_t
+        data["vessel_fuel_eur_per_h_sailing"] = self.vessel_fuel_eur_per_h_sailing
+        data["hoteling_fuel_eur_per_h"] = self.hoteling_fuel_eur_per_h
         return data
 
 
 @dataclass
 class StepEconomics:
-    """Per-step economic breakdown in EUR (costs positive, revenue positive)."""
+    """Per-step economic breakdown in EUR (costs positive)."""
 
-    vessel_charter: float = 0.0
     vessel_fuel: float = 0.0
-    handling: float = 0.0
-    injection: float = 0.0
+    conditioning: float = 0.0
+    reconditioning: float = 0.0
+    loading: float = 0.0
+    unloading: float = 0.0
     vent_penalty: float = 0.0
-    revenue_storage: float = 0.0
 
     # Tonnage bookkeeping for downstream KPIs.
     stored_t: float = 0.0
     vented_t: float = 0.0
+    conditioned_t: float = 0.0
+    reconditioned_t: float = 0.0
+    loaded_t: float = 0.0
+    unloaded_t: float = 0.0
     handled_t: float = 0.0
 
     @property
     def operating_cost(self) -> float:
-        """Cash operating cost excluding penalties and revenue."""
-        return self.vessel_charter + self.vessel_fuel + self.handling + self.injection
+        """Cash operating cost excluding penalties."""
+        return self.vessel_fuel + self.conditioning + self.reconditioning + self.loading + self.unloading
 
     @property
     def total_cost(self) -> float:
@@ -107,22 +105,26 @@ class StepEconomics:
 
     @property
     def net(self) -> float:
-        """Revenue minus all costs and penalties (the economic reward term)."""
-        return self.revenue_storage - self.total_cost
+        """Negative total cost, used as the economic reward term."""
+        return -self.total_cost
 
     def as_dict(self) -> dict[str, object]:
         return {
-            "vessel_charter": self.vessel_charter,
             "vessel_fuel": self.vessel_fuel,
-            "handling": self.handling,
-            "injection": self.injection,
+            "conditioning": self.conditioning,
+            "reconditioning": self.reconditioning,
+            "loading": self.loading,
+            "unloading": self.unloading,
             "vent_penalty": self.vent_penalty,
-            "revenue_storage": self.revenue_storage,
             "operating_cost": self.operating_cost,
             "total_cost": self.total_cost,
             "net": self.net,
             "stored_t": self.stored_t,
             "vented_t": self.vented_t,
+            "conditioned_t": self.conditioned_t,
+            "reconditioned_t": self.reconditioned_t,
+            "loaded_t": self.loaded_t,
+            "unloaded_t": self.unloaded_t,
             "handled_t": self.handled_t,
         }
 
@@ -143,17 +145,24 @@ class CostModel:
 
         stored_t = sum(state.last_injection_flow_tph.values()) * hours
         vented_t = sum(state.last_vent_tph.values()) * hours
-        handled_t = self._handled_tonnes(network, step_result.flows_t)
+        loaded_t, unloaded_t, loading_h, unloading_h = self._loading_unloading_activity(network, step_result.flows_t)
+        conditioned_t = loaded_t
+        reconditioned_t = self._pipeline_transfer_tonnes(network, step_result.flows_t) or stored_t
+        handled_t = loaded_t + unloaded_t
 
         return StepEconomics(
-            vessel_charter=len(vessel_ids) * params.vessel_charter_eur_per_h * hours,
             vessel_fuel=sailing_count * params.vessel_fuel_eur_per_h_sailing * hours,
-            handling=handled_t * params.handling_eur_per_t,
-            injection=stored_t * params.injection_cost_eur_per_t,
-            vent_penalty=vented_t * params.vent_penalty_eur_per_t,
-            revenue_storage=stored_t * params.storage_tariff_eur_per_t,
+            conditioning=conditioned_t * params.conditioning_eur_per_t,
+            reconditioning=reconditioned_t * params.reconditioning_eur_per_t,
+            loading=loading_h * params.hoteling_fuel_eur_per_h,
+            unloading=unloading_h * params.hoteling_fuel_eur_per_h,
+            vent_penalty=vented_t * params.carbon_price_eur_per_t,
             stored_t=stored_t,
             vented_t=vented_t,
+            conditioned_t=conditioned_t,
+            reconditioned_t=reconditioned_t,
+            loaded_t=loaded_t,
+            unloaded_t=unloaded_t,
             handled_t=handled_t,
         )
 
@@ -174,47 +183,75 @@ class CostModel:
         shortfall_t = max(0.0, required_t - cumulative_stored_t)
         return shortfall_t * self.parameters.storage_shortfall_eur_per_t
 
-    def _handled_tonnes(self, network, flows_t: dict[tuple[str, str], float]) -> float:
-        handled_t = 0.0
+    def _loading_unloading_activity(self, network, flows_t: dict[tuple[str, str], float]) -> tuple[float, float, float, float]:
+        loaded_t = 0.0
+        unloaded_t = 0.0
+        loading_h = 0.0
+        unloading_h = 0.0
         for (source_id, target_id), amount_t in flows_t.items():
             source = network.entities.get(source_id)
             target = network.entities.get(target_id)
-            is_loading = isinstance(source, Emitter) and isinstance(target, Vessel)
-            is_unloading = isinstance(source, Vessel) and isinstance(target, Terminal)
-            if is_loading or is_unloading:
-                handled_t += amount_t
-        return handled_t
+            if isinstance(source, Emitter) and isinstance(target, Vessel):
+                loaded_t += amount_t
+                loading_rate_tph = min(source.loading_rate_tph, target.loading_rate_tph)
+                loading_h += self._transfer_hours(amount_t, loading_rate_tph, network.time_step_hours)
+            elif isinstance(source, Vessel) and isinstance(target, Terminal):
+                unloaded_t += amount_t
+                unloading_h += self._transfer_hours(amount_t, source.unloading_rate_tph, network.time_step_hours)
+        return loaded_t, unloaded_t, loading_h, unloading_h
+
+    def _transfer_hours(self, amount_t: float, rate_tph: float, max_hours: float) -> float:
+        if amount_t <= 0.0 or rate_tph <= 0.0 or max_hours <= 0.0:
+            return 0.0
+        return min(max_hours, amount_t / rate_tph)
+
+    def _pipeline_transfer_tonnes(self, network, flows_t: dict[tuple[str, str], float]) -> float:
+        transferred_t = 0.0
+        for (source_id, target_id), amount_t in flows_t.items():
+            source = network.entities.get(source_id)
+            target = network.entities.get(target_id)
+            if isinstance(source, Terminal) and isinstance(target, Pipeline):
+                transferred_t += amount_t
+        return transferred_t
 
 
 @dataclass
 class EconomicLedger:
     """Accumulates per-step economics across an episode for reporting."""
 
-    vessel_charter: float = 0.0
     vessel_fuel: float = 0.0
-    handling: float = 0.0
-    injection: float = 0.0
+    conditioning: float = 0.0
+    reconditioning: float = 0.0
+    loading: float = 0.0
+    unloading: float = 0.0
     vent_penalty: float = 0.0
-    revenue_storage: float = 0.0
     storage_shortfall_penalty: float = 0.0
     stored_t: float = 0.0
     vented_t: float = 0.0
+    conditioned_t: float = 0.0
+    reconditioned_t: float = 0.0
+    loaded_t: float = 0.0
+    unloaded_t: float = 0.0
     handled_t: float = 0.0
 
     def add(self, step: StepEconomics) -> None:
-        self.vessel_charter += step.vessel_charter
         self.vessel_fuel += step.vessel_fuel
-        self.handling += step.handling
-        self.injection += step.injection
+        self.conditioning += step.conditioning
+        self.reconditioning += step.reconditioning
+        self.loading += step.loading
+        self.unloading += step.unloading
         self.vent_penalty += step.vent_penalty
-        self.revenue_storage += step.revenue_storage
         self.stored_t += step.stored_t
         self.vented_t += step.vented_t
+        self.conditioned_t += step.conditioned_t
+        self.reconditioned_t += step.reconditioned_t
+        self.loaded_t += step.loaded_t
+        self.unloaded_t += step.unloaded_t
         self.handled_t += step.handled_t
 
     @property
     def operating_cost(self) -> float:
-        return self.vessel_charter + self.vessel_fuel + self.handling + self.injection
+        return self.vessel_fuel + self.conditioning + self.reconditioning + self.loading + self.unloading
 
     @property
     def total_cost(self) -> float:
@@ -222,21 +259,25 @@ class EconomicLedger:
 
     @property
     def net(self) -> float:
-        return self.revenue_storage - self.total_cost
+        return -self.total_cost
 
     def as_dict(self) -> dict[str, object]:
         return {
-            "vessel_charter": self.vessel_charter,
             "vessel_fuel": self.vessel_fuel,
-            "handling": self.handling,
-            "injection": self.injection,
+            "conditioning": self.conditioning,
+            "reconditioning": self.reconditioning,
+            "loading": self.loading,
+            "unloading": self.unloading,
             "vent_penalty": self.vent_penalty,
             "storage_shortfall_penalty": self.storage_shortfall_penalty,
-            "revenue_storage": self.revenue_storage,
             "operating_cost": self.operating_cost,
             "total_cost": self.total_cost,
             "net": self.net,
             "stored_t": self.stored_t,
             "vented_t": self.vented_t,
+            "conditioned_t": self.conditioned_t,
+            "reconditioned_t": self.reconditioned_t,
+            "loaded_t": self.loaded_t,
+            "unloaded_t": self.unloaded_t,
             "handled_t": self.handled_t,
         }

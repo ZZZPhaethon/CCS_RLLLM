@@ -3,7 +3,7 @@
 This is the layer that turns the deterministic physical twin into something an
 RL agent can train against. Each episode :meth:`reset` samples a
 :class:`~sim.scenario_generation.Scenario` (the exogenous disturbances), and each
-:meth:`step` maps a discrete control vector into physical action proposals, runs
+:meth:`step` maps a hybrid control action into physical action proposals, runs
 one hour of physics through the :class:`~sim.simulator.PhysicalSimulator`,
 applies the scenario disturbances, and prices the outcome with the
 :class:`~sim.economics.CostModel` to produce the reward.
@@ -11,18 +11,19 @@ applies the scenario disturbances, and prices the outcome with the
 The interface is gym-style (``reset`` / ``step`` returning
 ``(obs, reward, done, info)``) but intentionally has **no numpy or gymnasium
 dependency** so it stays importable anywhere. Observations are flat ``list[float]``
-and the action space is a small ``MultiDiscrete`` described by
-:attr:`CCSEnv.action_dims`; wrapping it for SB3/gymnasium later is trivial.
+and the native action is a dictionary with discrete vessel choices plus
+continuous well rates in Mt/y.
 
 Controls (section 7.2 of the research note):
 - per vessel: ``WAIT`` / ``GO_TERMINAL`` / ``GO_EMITTER[id]``;
-- per well: ``OFF`` during maintenance, otherwise 0.5 / 1.0 / 1.5 / 2.0 Mt/y.
+- per well: continuous injection rate, bounded to 0.5-2.0 Mt/y when available
+  and forced to 0 while the well is under maintenance.
 
 Loading at any emitter berth and unloading at the terminal are issued
 automatically (they are never the interesting decision); the agent chooses which
-emitter or terminal to send vessels to and how hard to inject. An action mask
-exposes which choices are physically legal so the policy only selects feasible
-actions (section 7.3).
+emitter or terminal to send vessels to and how hard to inject. A vessel action
+mask exposes which destination choices are physically legal, while
+``well_rate_bounds()`` exposes the continuous injection bounds.
 """
 
 from __future__ import annotations
@@ -48,14 +49,13 @@ VESSEL_WAIT, VESSEL_GO_TERMINAL = 0, 1
 VESSEL_GO_EMITTER_BASE = 2
 VESSEL_ACTIONS = VESSEL_GO_EMITTER_BASE
 
-# Well injection modes are expressed in Mt/y. OFF is only legal while a well is
-# under maintenance; otherwise the action mask enforces the 0.5 Mt/y minimum.
-WELL_MODE_RATES_MTPA = (0.0, 0.5, 1.0, 1.5, 2.0)
-WELL_MODE_FRACTIONS = WELL_MODE_RATES_MTPA
-WELL_ACTIONS = len(WELL_MODE_RATES_MTPA)
+MIN_WELL_RATE_MTPA = 0.5
+MAX_WELL_RATE_MTPA = 2.0
+WELL_RATE_BOUNDS_MTPA = (MIN_WELL_RATE_MTPA, MAX_WELL_RATE_MTPA)
 _MTPA_TO_TPH = 1_000_000.0 / (365.25 * 24.0)
 
 Coordinate = tuple[float, float]
+CCSAction = dict[str, list[int] | list[float]]
 
 
 @dataclass
@@ -92,9 +92,9 @@ class CCSEnv:
         self.well_ids = sorted(network._entities_of_type(InjectionWell))
         self.reservoir_ids = sorted(network._entities_of_type(Reservoir))
 
-        # Total capacity that can hold in-transit (backlog) CO2, used to normalise
-        # the backlog observation into a horizon-invariant [0, 1] fill signal.
-        self._backlog_capacity_t = (
+        # Total capacity that can hold captured-but-not-yet-stored CO2, used to
+        # normalise the in-transit observation into a horizon-invariant [0, 1].
+        self._in_transit_capacity_t = (
             sum(network.entities[e].buffer_capacity_t for e in self.emitter_ids)
             + sum(network.entities[v].capacity_t for v in self.vessel_ids)
             + sum(network.entities[t].storage_capacity_t for t in self.terminal_ids)
@@ -110,11 +110,31 @@ class CCSEnv:
         self.cumulative_captured_t = 0.0
         self.cumulative_stored_t = 0.0
         self.last_info: dict = {}
+        self._prev_shortfall_penalty = 0.0
 
     # -- spaces -----------------------------------------------------------
     @property
     def action_dims(self) -> list[int]:
-        return [self.vessel_action_count] * len(self.vessel_ids) + [WELL_ACTIONS] * len(self.well_ids)
+        """Discrete dimensions for vessel decisions.
+
+        The well controls are continuous and exposed through
+        :meth:`well_rate_bounds`, so this compatibility alias intentionally only
+        covers vessel dimensions.
+        """
+        return self.vessel_action_dims
+
+    @property
+    def vessel_action_dims(self) -> list[int]:
+        return [self.vessel_action_count] * len(self.vessel_ids)
+
+    def well_rate_bounds(self) -> list[tuple[float, float]]:
+        return [self._well_rate_bound(wid) for wid in self.well_ids]
+
+    def action_spec(self) -> dict[str, object]:
+        return {
+            "vessel_action_dims": self.vessel_action_dims,
+            "well_rate_bounds": self.well_rate_bounds(),
+        }
 
     @property
     def vessel_action_count(self) -> int:
@@ -132,9 +152,9 @@ class CCSEnv:
     @property
     def feature_names(self) -> list[str]:
         # Horizon-invariant globals only: a weekly clock (weather/ops cycle) and
-        # the instantaneous system backlog fill. No episode-relative features, so a
+        # the instantaneous in-transit inventory fill. No episode-relative features, so a
         # policy trained on short episodes transfers to a long evaluation rollout.
-        names = ["hour_of_week", "backlog_fill"]
+        names = ["hour_of_week", "in_transit_fill"]
         for eid in self.emitter_ids:
             names += [f"{eid}.fill", f"{eid}.capture_norm", f"{eid}.availability"]
         for vid in self.vessel_ids:
@@ -160,22 +180,20 @@ class CCSEnv:
         self.ledger = EconomicLedger()
         self.cumulative_captured_t = 0.0
         self.cumulative_stored_t = 0.0
-        self.initial_backlog_t = self._backlog()
-        self._prev_backlog_t = self.initial_backlog_t
-        self.cumulative_backlog_penalty = 0.0
+        self.initial_in_transit_t = self._in_transit_inventory()
+        self._prev_shortfall_penalty = 0.0
         self._apply_disturbances()
-        self.last_info = {"action_mask": self.action_mask()}
+        self.last_info = self._action_info()
         return self._observation()
 
-    def step(self, action: list[int]) -> tuple[list[float], float, bool, bool, dict]:
+    def step(self, action: CCSAction) -> tuple[list[float], float, bool, bool, dict]:
         if self.simulator is None or self.scenario is None:
             raise RuntimeError("Call reset() before step().")
-        if len(action) != len(self.action_dims):
-            raise ValueError(f"Expected action of length {len(self.action_dims)}, got {len(action)}.")
+        normalized_action = self._normalize_action(action)
 
         hours = self.network.time_step_hours
         current_time = self.simulator.state.time_h
-        proposals = self._build_proposals(action)
+        proposals = self._build_proposals(normalized_action)
         record = self.simulator.step(
             ActionFrame(time_h=current_time, proposals=proposals), compute_observation=False
         )
@@ -192,20 +210,18 @@ class CCSEnv:
         self.cumulative_captured_t += captured_step
         self.cumulative_stored_t += economics.stored_t
         self.ledger.add(economics)
+        shortfall_penalty = self.cost_model.storage_shortfall_penalty(
+            self.cumulative_captured_t,
+            self.cumulative_stored_t,
+            self.config.storage_target_rate,
+        )
+        shortfall_delta_penalty = shortfall_penalty - self._prev_shortfall_penalty
+        self._prev_shortfall_penalty = shortfall_penalty
+        self.ledger.storage_shortfall_penalty += shortfall_delta_penalty
 
-        # Horizon-appropriate shaping: penalize backlog (in-transit CO2) *growth*
-        # instead of the absolute annual-target gap. Capture adds to backlog every
-        # hour; storing drains it. A positive penalty means the system fell behind
-        # this step, a negative one (reward) means it caught up. Summed over the
-        # episode this telescopes to (backlog_end - backlog_start), so there is no
-        # reward farming. Recoverable in-transit CO2 is no longer mislabelled as a
-        # contractual miss; venting (true loss) is still penalized via economics.
-        backlog_now = self._backlog()
-        backlog_growth = backlog_now - self._prev_backlog_t
-        backlog_penalty = backlog_growth * self.cost_model.parameters.backlog_penalty_eur_per_t
-        self._prev_backlog_t = backlog_now
-        self.cumulative_backlog_penalty += backlog_penalty
-        reward = (economics.net - backlog_penalty) * self.config.reward_scale
+        in_transit_now = self._in_transit_inventory()
+        in_transit_growth = in_transit_now - self.initial_in_transit_t
+        reward = (economics.net - shortfall_delta_penalty) * self.config.reward_scale
 
         self.t += 1
         # The operational task is fixed-horizon: there is no early terminal
@@ -218,13 +234,14 @@ class CCSEnv:
         info = {
             "time_h": step_result.state.time_h,
             "economics": economics.as_dict(),
-            "backlog_t": backlog_now,
-            "backlog_growth_t": backlog_growth,
-            "backlog_penalty": backlog_penalty,
+            "in_transit_t": in_transit_now,
+            "in_transit_growth_t": in_transit_growth,
+            "shortfall_penalty": shortfall_penalty,
+            "shortfall_delta_penalty": shortfall_delta_penalty,
             "storage_rate": self.storage_rate(),
             "loss_rate": self.loss_rate(),
             "violations": [v.violation_type for v in step_result.violations],
-            "action_mask": self.action_mask(),
+            **self._action_info(),
         }
         self.last_info = info
         return self._observation(), reward, terminated, truncated, info
@@ -243,7 +260,7 @@ class CCSEnv:
             return 0.0
         return self.ledger.vented_t / self.cumulative_captured_t
 
-    def _backlog(self) -> float:
+    def _in_transit_inventory(self) -> float:
         """In-transit CO2: captured but not yet stored (everything but reservoirs)."""
         reservoirs = set(self.reservoir_ids)
         return sum(
@@ -253,12 +270,22 @@ class CCSEnv:
         )
 
     # -- action mask ------------------------------------------------------
+    def _action_info(self) -> dict:
+        vessel_mask = self.vessel_action_mask()
+        bounds = self.well_rate_bounds()
+        return {
+            "action_mask": vessel_mask,
+            "vessel_action_mask": vessel_mask,
+            "well_rate_bounds": bounds,
+        }
+
     def action_mask(self) -> list[list[bool]]:
+        return self.vessel_action_mask()
+
+    def vessel_action_mask(self) -> list[list[bool]]:
         mask: list[list[bool]] = []
         for vid in self.vessel_ids:
             mask.append(self._vessel_mask(vid))
-        for wid in self.well_ids:
-            mask.append(self._well_mask(wid))
         return mask
 
     def _vessel_mask(self, vessel_id: str) -> list[bool]:
@@ -272,16 +299,36 @@ class CCSEnv:
         mask.extend(berth != emitter_id for emitter_id in self.emitter_ids)
         return mask
 
-    def _well_mask(self, well_id: str) -> list[bool]:
+    def _well_rate_bound(self, well_id: str) -> tuple[float, float]:
+        if self.simulator is None:
+            return WELL_RATE_BOUNDS_MTPA
         available = self.simulator.state.well_available.get(well_id, True)
         if not available:
-            return [True] + [False] * (WELL_ACTIONS - 1)  # maintenance: only OFF
-        return [False] + [True] * (WELL_ACTIONS - 1)
+            return (0.0, 0.0)
+        return WELL_RATE_BOUNDS_MTPA
 
     # -- action translation ----------------------------------------------
-    def _build_proposals(self, action: list[int]) -> list[ActionProposal]:
-        vessel_actions = action[: len(self.vessel_ids)]
-        well_actions = action[len(self.vessel_ids):]
+    def _normalize_action(self, action: CCSAction) -> dict[str, list]:
+        if not isinstance(action, dict):
+            raise ValueError("Expected action dict with 'vessels' and 'wells' entries.")
+        if "vessels" not in action or "wells" not in action:
+            raise ValueError("Expected action dict with 'vessels' and 'wells' entries.")
+
+        vessel_actions = list(action["vessels"])
+        well_rates = list(action["wells"])
+        if len(vessel_actions) != len(self.vessel_ids):
+            raise ValueError(f"Expected {len(self.vessel_ids)} vessel actions, got {len(vessel_actions)}.")
+        if len(well_rates) != len(self.well_ids):
+            raise ValueError(f"Expected {len(self.well_ids)} well rates, got {len(well_rates)}.")
+
+        return {
+            "vessels": [int(choice) for choice in vessel_actions],
+            "wells": [float(rate) for rate in well_rates],
+        }
+
+    def _build_proposals(self, action: dict[str, list]) -> list[ActionProposal]:
+        vessel_actions = action["vessels"]
+        well_rates = action["wells"]
         proposals: list[ActionProposal] = []
 
         # Always capture at full rate (capture is not an RL control here).
@@ -291,7 +338,7 @@ class CCSEnv:
         departing = self._vessel_dispatch_proposals(vessel_actions, proposals)
         self._auto_loading_proposals(proposals, departing)
         self._auto_unloading_proposals(proposals, departing)
-        self._injection_proposals(well_actions, proposals)
+        self._injection_proposals(well_rates, proposals)
         return proposals
 
     def _vessel_dispatch_proposals(self, vessel_actions, proposals) -> set[str]:
@@ -352,15 +399,15 @@ class CCSEnv:
                 candidates.append(vessel_id)
         return sorted(candidates)[0] if candidates else None
 
-    def _injection_proposals(self, well_actions, proposals) -> None:
+    def _injection_proposals(self, well_rates, proposals) -> None:
         desired: dict[str, float] = {}
-        for well_id, choice in zip(self.well_ids, well_actions):
-            available = self.simulator.state.well_available.get(well_id, True)
-            if not available:
+        for well_id, requested_rate_mtpa in zip(self.well_ids, well_rates):
+            lower, upper = self._well_rate_bound(well_id)
+            if upper <= 0.0:
                 desired[well_id] = 0.0
                 continue
-            mode = max(1, min(int(choice), WELL_ACTIONS - 1))
-            desired[well_id] = WELL_MODE_RATES_MTPA[mode] * _MTPA_TO_TPH
+            rate_mtpa = min(max(float(requested_rate_mtpa), lower), upper)
+            desired[well_id] = rate_mtpa * _MTPA_TO_TPH
 
         for pipeline_id in self.network._entities_of_type(Pipeline):
             wells = self._pipeline_wells(pipeline_id)
@@ -387,8 +434,8 @@ class CCSEnv:
     def _observation(self) -> list[float]:
         state = self.simulator.state
         hour_of_week = (state.time_h % 168.0) / 168.0
-        backlog_fill = _safe_div(self._backlog(), self._backlog_capacity_t)
-        obs: list[float] = [hour_of_week, backlog_fill]
+        in_transit_fill = _safe_div(self._in_transit_inventory(), self._in_transit_capacity_t)
+        obs: list[float] = [hour_of_week, in_transit_fill]
         for eid in self.emitter_ids:
             emitter = self.network.entities[eid]
             inv = state.entity_inventory_t.get(eid, 0.0)

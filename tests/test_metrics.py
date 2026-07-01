@@ -34,6 +34,8 @@ class RunEpisodeTests(unittest.TestCase):
         self.assertAlmostEqual(metrics.storage_rate, env.storage_rate())
         self.assertAlmostEqual(metrics.stored_t, env.cumulative_stored_t)
         self.assertAlmostEqual(metrics.net, env.ledger.net)
+        self.assertAlmostEqual(metrics.total_cost, env.ledger.total_cost)
+        self.assertAlmostEqual(metrics.storage_shortfall_penalty, env.ledger.storage_shortfall_penalty)
         self.assertEqual(metrics.horizon_hours, 48)
 
     def test_kpis_are_in_sensible_ranges(self):
@@ -65,14 +67,14 @@ class RunEpisodeTests(unittest.TestCase):
         b = run_episode(_env(), greedy_shuttle_policy, seed=11).as_dict()
         self.assertEqual(a, b)
 
-    def test_backlog_growth_obeys_mass_balance(self):
-        # backlog grows by exactly captured - stored - vented (in-transit identity).
+    def test_in_transit_growth_obeys_mass_balance(self):
+        # In-transit inventory grows by exactly captured - stored - vented.
         m = run_episode(_env(), greedy_shuttle_policy, seed=4)
-        self.assertAlmostEqual(m.backlog_growth_t, m.captured_t - m.stored_t - m.vented_t, places=3)
+        self.assertAlmostEqual(m.in_transit_growth_t, m.captured_t - m.stored_t - m.vented_t, places=3)
 
-    def test_idle_accumulates_backlog_without_losing_co2(self):
+    def test_idle_accumulates_in_transit_inventory_without_losing_co2(self):
         # Idling stores nothing, so captured CO2 piles up in buffers but is not lost
-        # in a short episode (loss rate ~ 0): the new signal, not a contractual miss.
+        # in a short episode (loss rate ~ 0).
         quiet = ScenarioConfig(
             episode_hours=48,
             capture_noise_std=0.0,
@@ -80,14 +82,14 @@ class RunEpisodeTests(unittest.TestCase):
             randomize_initial_inventory=False,
         )
         m = run_episode(_env(scenario_config=quiet), idle_policy, seed=6)
-        self.assertGreater(m.backlog_growth_t, 0.0)
+        self.assertGreater(m.in_transit_growth_t, 0.0)
         self.assertEqual(m.loss_rate, 0.0)
-        self.assertGreater(m.backlog_penalty, 0.0)
+        self.assertFalse(any("backlog" in key for key in m.as_dict()))
 
-    def test_shuttle_grows_backlog_less_than_idle(self):
+    def test_shuttle_grows_in_transit_inventory_less_than_idle(self):
         idle = run_episode(_env(), idle_policy, seed=8)
         shuttle = run_episode(_env(), greedy_shuttle_policy, seed=8)
-        self.assertLess(shuttle.backlog_growth_t, idle.backlog_growth_t)
+        self.assertLess(shuttle.in_transit_growth_t, idle.in_transit_growth_t)
 
 
 class HorizonModeTests(unittest.TestCase):
@@ -135,7 +137,13 @@ class AggregateTests(unittest.TestCase):
         text = run_episode(_env(), greedy_shuttle_policy, seed=2).report()
         for token in ("storage rate", "operating cost", "throttle hours", "pressure-risk"):
             self.assertIn(token, text)
+        self.assertNotIn("revenue", text)
+        self.assertNotIn("backlog", text)
         self.assertNotIn("goal", text.lower())
+
+    def test_metrics_do_not_expose_storage_revenue(self):
+        metrics = run_episode(_env(), greedy_shuttle_policy, seed=2)
+        self.assertNotIn("revenue_storage", metrics.as_dict())
 
 
 if __name__ == "__main__":

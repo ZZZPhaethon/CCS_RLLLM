@@ -1,10 +1,9 @@
 """Train a centralized RL policy on the CCS network and score it vs baselines.
 
-Uses ``MaskablePPO`` (action masking + automatic ``V(s_T)`` bootstrapping at the
-truncated horizon). ``gamma`` defaults to 0.999 (~6-week lookahead in hourly
-steps) so the value function can see the week-scale backlog -> venting
-consequence the reward shaping points at; slower (yearly) dynamics are handled by
-warm-start state randomization, not by the discount.
+The environment now has a hybrid action space: discrete vessel destinations plus
+continuous well injection rates. The old flat ``MaskablePPO`` trainer cannot
+represent that distribution, so this module keeps evaluation helpers and fails
+fast if the legacy trainer is called.
 
 Run as a script:
     PYTHONPATH=src python -m sim.train --timesteps 200000
@@ -17,7 +16,7 @@ import argparse
 from .economics import CostModel, EconomicParameters
 from .control.baselines import greedy_shuttle_policy, idle_policy
 from .environment import CCSEnvConfig, build_phase1_env
-from .environment.gym_adapter import CCSGymEnv, make_ppo_policy
+from .environment.gym_adapter import make_ppo_policy
 from .metrics import evaluate
 from .scenario_generation import ScenarioConfig, ScenarioGenerator
 
@@ -26,15 +25,14 @@ def make_native_env(
     episode_hours: int = 168,
     storage_target_rate: float = 0.9,
     warm_start: bool = True,
-    backlog_penalty: float = 20.0,
+    storage_shortfall_penalty: float = 100.0,
 ):
     """A native CCSEnv on the real Phase 1 network configured for RL.
 
-    ``backlog_penalty`` (EUR/t of backlog growth) is the "keep up with capture"
-    weight: raising it makes the storage obligation harder, pushing the policy to
-    ship and inject more aggressively at the cost of worse pure economics.
+    ``storage_shortfall_penalty`` is the common storage-obligation weight used by
+    RL rewards and both MILP objectives.
     """
-    cost_model = CostModel(EconomicParameters(backlog_penalty_eur_per_t=backlog_penalty))
+    cost_model = CostModel(EconomicParameters(storage_shortfall_eur_per_t=storage_shortfall_penalty))
     return build_phase1_env(
         scenario_generator=ScenarioGenerator(
             config=ScenarioConfig(episode_hours=episode_hours, warm_start=warm_start)
@@ -50,27 +48,14 @@ def train_ppo(
     gamma: float = 0.999,
     episode_hours: int = 168,
     warm_start: bool = True,
-    backlog_penalty: float = 20.0,
+    storage_shortfall_penalty: float = 100.0,
     verbose: int = 1,
 ):
-    from sb3_contrib import MaskablePPO
-
-    gym_env = CCSGymEnv(
-        make_native_env(
-            episode_hours=episode_hours, warm_start=warm_start, backlog_penalty=backlog_penalty
-        )
+    raise NotImplementedError(
+        "The CCS env now uses hybrid actions (discrete vessels + continuous wells). "
+        "sb3_contrib.MaskablePPO only handled the removed flat discrete action space; "
+        "use a hybrid PPO policy/distribution before training PPO here."
     )
-    model = MaskablePPO(
-        "MlpPolicy",
-        gym_env,
-        gamma=gamma,
-        seed=seed,
-        n_steps=2048,
-        batch_size=256,
-        verbose=verbose,
-    )
-    model.learn(total_timesteps=total_timesteps)
-    return model
 
 
 def compare(model, seeds: list[int], episode_hours: int = 168, warm_start: bool = False):
@@ -89,20 +74,20 @@ def compare(model, seeds: list[int], episode_hours: int = 168, warm_start: bool 
 
 
 def _format_comparison(rows: dict) -> str:
-    header = f"{'policy':16} {'storage%':>9} {'loss%':>7} {'backlog+':>10} {'net EUR':>16}"
+    header = f"{'policy':16} {'storage%':>9} {'loss%':>7} {'shortfall EUR':>14} {'total EUR':>14}"
     lines = [header, "-" * len(header)]
     for name, s in rows.items():
         lines.append(
             f"{name:16} {s['storage_rate']['mean'] * 100:8.1f}% "
             f"{s['loss_rate']['mean'] * 100:6.1f}% "
-            f"{s['backlog_growth_t']['mean']:10,.0f} "
-            f"{s['net']['mean']:16,.0f}"
+            f"{s['storage_shortfall_penalty']['mean']:14,.0f} "
+            f"{s['total_cost']['mean']:14,.0f}"
         )
     return "\n".join(lines)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Train MaskablePPO on the CCS network.")
+    parser = argparse.ArgumentParser(description="Train a hybrid-action PPO policy on the CCS network.")
     parser.add_argument("--timesteps", type=int, default=200_000)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--gamma", type=float, default=0.999)

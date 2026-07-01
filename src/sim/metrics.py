@@ -1,7 +1,7 @@
 """Evaluation metrics - one common scorecard for every method.
 
 A controller (heuristic, MILP or RL policy) is just a callable
-``policy(env) -> list[int]``. :func:`run_episode` rolls it out against a
+``policy(env) -> {"vessels": [...], "wells": [...]}``. :func:`run_episode` rolls it out against a
 :class:`~sim.environment.CCSEnv` and returns an :class:`EpisodeMetrics` with the physical
 and economic KPIs of section 13; :func:`evaluate` repeats this across seeds and
 aggregates mean/std so baselines and policies can be compared on equal footing.
@@ -15,7 +15,7 @@ from typing import Callable
 
 from .environment import CCSEnv
 
-Policy = Callable[[CCSEnv], list[int]]
+Policy = Callable[[CCSEnv], dict[str, list]]
 
 _PRESSURE_RISK_MARGIN_FRACTION = 0.10
 _EPS = 1e-9
@@ -33,8 +33,8 @@ class EpisodeMetrics:
     captured_t: float = 0.0
     stored_t: float = 0.0
     vented_t: float = 0.0
-    in_transit_t: float = 0.0          # backlog held in buffers/ships/terminal at episode end
-    backlog_growth_t: float = 0.0      # how far the system fell behind (end - start)
+    in_transit_t: float = 0.0          # captured CO2 not yet stored at episode end
+    in_transit_growth_t: float = 0.0   # end minus start captured-but-not-yet-stored CO2
     loss_rate: float = 0.0             # vented / captured: short-horizon truth
     storage_rate: float = 0.0          # stored / captured: only meaningful over a long horizon
     annual_storage_gap_t: float = 0.0  # target*captured - stored (long-horizon obligation only)
@@ -42,8 +42,8 @@ class EpisodeMetrics:
     # Economic KPIs (EUR).
     operating_cost: float = 0.0
     vent_penalty: float = 0.0
-    backlog_penalty: float = 0.0
-    revenue_storage: float = 0.0
+    storage_shortfall_penalty: float = 0.0
+    total_cost: float = 0.0
     net: float = 0.0
     cost_per_stored_t: float | None = None
 
@@ -67,14 +67,14 @@ class EpisodeMetrics:
             f"  ran                  : {self.elapsed_hours:.0f} h",
             f"  stored               : {self.stored_t:,.0f} t  (of {self.captured_t:,.0f} t captured)",
             f"  vented (lost)        : {self.vented_t:,.0f} t   loss rate {self.loss_rate:.2%}",
-            f"  in-transit backlog   : {self.in_transit_t:,.0f} t   "
-            f"(grew {self.backlog_growth_t:+,.0f} t this episode)",
+            f"  in-transit inventory : {self.in_transit_t:,.0f} t   "
+            f"(changed {self.in_transit_growth_t:+,.0f} t this episode)",
             f"  storage rate         : {self.storage_rate:.1%}  [long-horizon KPI]",
             f"  annual storage gap   : {self.annual_storage_gap_t:,.0f} t  [long-horizon KPI]",
             f"  operating cost       : EUR {self.operating_cost:,.0f}",
             f"  vent penalty         : EUR {self.vent_penalty:,.0f}",
-            f"  backlog penalty      : EUR {self.backlog_penalty:,.0f}",
-            f"  revenue              : EUR {self.revenue_storage:,.0f}",
+            f"  shortfall penalty    : EUR {self.storage_shortfall_penalty:,.0f}",
+            f"  total cost           : EUR {self.total_cost:,.0f}",
             f"  net                  : EUR {self.net:,.0f}",
             f"  cost / stored t      : "
             + ("n/a" if self.cost_per_stored_t is None else f"EUR {self.cost_per_stored_t:,.1f}"),
@@ -158,7 +158,7 @@ class _MetricsRecorder:
         ledger = env.ledger
         captured = env.cumulative_captured_t
         stored = env.cumulative_stored_t
-        in_transit = env._backlog()
+        in_transit = env._in_transit_inventory()
         annual_gap_t = max(0.0, env.config.storage_target_rate * captured - stored)
         cost_per_stored = ledger.operating_cost / stored if stored > _EPS else None
         return EpisodeMetrics(
@@ -169,14 +169,14 @@ class _MetricsRecorder:
             stored_t=stored,
             vented_t=ledger.vented_t,
             in_transit_t=in_transit,
-            backlog_growth_t=in_transit - env.initial_backlog_t,
+            in_transit_growth_t=in_transit - env.initial_in_transit_t,
             loss_rate=env.loss_rate(),
             storage_rate=env.storage_rate(),
             annual_storage_gap_t=annual_gap_t,
             operating_cost=ledger.operating_cost,
             vent_penalty=ledger.vent_penalty,
-            backlog_penalty=env.cumulative_backlog_penalty,
-            revenue_storage=ledger.revenue_storage,
+            storage_shortfall_penalty=ledger.storage_shortfall_penalty,
+            total_cost=ledger.total_cost,
             net=ledger.net,
             cost_per_stored_t=cost_per_stored,
             throttle_hours=self.throttle_hours,
@@ -214,14 +214,15 @@ def evaluate(
 
 def format_fixed_horizon(name_to_summary: dict[str, dict[str, dict[str, float]]]) -> str:
     """Render a fixed-horizon comparison: stored tonnes, loss, and cost."""
-    header = f"{'policy':16} {'hours':>8} {'stored t':>10} {'op cost EUR':>14} {'EUR/t':>9} {'vented t':>10}"
+    header = f"{'policy':16} {'hours':>8} {'stored t':>10} {'total EUR':>14} {'op EUR':>12} {'vented t':>10}"
     lines = [header, "-" * len(header)]
     for name, s in name_to_summary.items():
-        eur_per_t = s["cost_per_stored_t"]["mean"] if "cost_per_stored_t" in s else float("nan")
+        total_summary = s["total_cost"] if "total_cost" in s else s["operating_cost"]
+        total_cost = total_summary["mean"]
         lines.append(
             f"{name:16} {s['elapsed_hours']['mean']:8.0f} "
             f"{s['stored_t']['mean']:10,.0f} "
-            f"{s['operating_cost']['mean']:14,.0f} {eur_per_t:9,.1f} "
+            f"{total_cost:14,.0f} {s['operating_cost']['mean']:12,.0f} "
             f"{s['vented_t']['mean']:10,.0f}"
         )
     return "\n".join(lines)
