@@ -4,25 +4,29 @@ from __future__ import annotations
 
 from ..environment import (
     CCSEnv,
+    MAX_WELL_RATE_MTPA,
+    MIN_WELL_RATE_MTPA,
     VESSEL_GO_TERMINAL,
     VESSEL_WAIT,
-    WELL_ACTIONS,
 )
 
 _EPS = 1e-9
 
 
-def idle_policy(env: CCSEnv) -> list[int]:
+def idle_policy(env: CCSEnv) -> dict[str, list]:
     """Do nothing with vessels while holding wells at their minimum stable mode."""
-    return [VESSEL_WAIT] * len(env.vessel_ids) + [1] * len(env.well_ids)
+    return {
+        "vessels": [VESSEL_WAIT] * len(env.vessel_ids),
+        "wells": [MIN_WELL_RATE_MTPA] * len(env.well_ids),
+    }
 
 
-def greedy_shuttle_policy(env: CCSEnv) -> list[int]:
+def greedy_shuttle_policy(env: CCSEnv) -> dict[str, list]:
     """Send full vessels to terminal, otherwise serve the best buffered emitter."""
     state = env.simulator.state
     action: list[int] = []
     for i, vessel_id in enumerate(env.vessel_ids):
-        mask = env.action_mask()[i]
+        mask = env.vessel_action_mask()[i]
         cargo = state.entity_inventory_t.get(vessel_id, 0.0)
         vessel = env.network.entities[vessel_id]
         berth = state.vessel_berths.get(vessel_id)
@@ -44,8 +48,7 @@ def greedy_shuttle_policy(env: CCSEnv) -> list[int]:
             action.append(VESSEL_GO_TERMINAL)
         else:
             action.append(VESSEL_WAIT)
-    action += [WELL_ACTIONS - 1] * len(env.well_ids)
-    return action
+    return {"vessels": action, "wells": [MAX_WELL_RATE_MTPA] * len(env.well_ids)}
 
 
 def _best_emitter_action(env: CCSEnv, mask: list[bool]) -> int | None:

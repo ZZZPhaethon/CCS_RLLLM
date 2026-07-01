@@ -50,7 +50,7 @@ def run_static_milp(
     time_limit_s: float | None = None,
     msg: bool = False,
 ) -> FixedHorizonMilpResult:
-    """Solve the idealized fixed-horizon upper bound on the real Phase 1 case."""
+    """Solve the idealized fixed-horizon cost oracle on the real Phase 1 case."""
     env = make_phase1_yara_env(episode_hours=episode_hours)
     return solve_max_storage_fixed_horizon(
         env,
@@ -82,28 +82,50 @@ def _format_static_milp(result: FixedHorizonMilpResult) -> str:
     lines = [
         "=== Static MILP fixed-horizon oracle ===",
         f"status             : {result.status}",
+        f"valid solution     : {result.is_valid}",
         f"horizon            : {result.horizon_h:,.0f} h",
+    ]
+    if not result.is_valid:
+        lines.extend(
+            [
+                f"not comparable     : {result.validation_error}",
+                f"max integrality err: {result.max_binary_integrality_violation:.3g}",
+            ]
+        )
+        return "\n".join(lines)
+
+    lines.extend(
+        [
         f"stored             : {result.stored_t:,.0f} t",
+        f"vented             : {result.vented_t:,.0f} t",
+        f"in-transit         : {result.in_transit_t:,.0f} t",
+        f"shortfall          : {result.shortfall_t:,.0f} t",
         f"deliveries         : {result.deliveries}",
         f"operating cost     : EUR {result.operating_cost:,.0f}",
-        f"cost / stored t    : EUR {result.cost_per_stored_t:,.1f}",
+        f"total cost         : EUR {result.total_cost:,.0f}",
+        f"op cost / stored t : EUR {result.cost_per_stored_t:,.1f}",
         "schedule:",
-    ]
+        ]
+    )
     for vessel_id, hours in result.schedule.items():
         rendered = ", ".join(str(h) for h in hours) if hours else "-"
         lines.append(f"  {vessel_id:20} {rendered}")
     return "\n".join(lines)
 
 
-def main() -> None:
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Benchmark MILP baselines on Phase 1.")
     parser.add_argument("--episode-hours", type=int, default=720)
     parser.add_argument("--static-milp-time-limit-s", type=float, default=None)
     parser.add_argument("--seeds", type=int, nargs="+", default=[1])
-    parser.add_argument("--replan-every", type=int, default=12)
+    parser.add_argument("--replan-every", type=int, default=24)
     parser.add_argument("--skip-policies", action="store_true")
     parser.add_argument("--solver-msg", action="store_true")
-    args = parser.parse_args()
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
 
     result = run_static_milp(
         episode_hours=args.episode_hours,

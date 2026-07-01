@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from experiments import benchmark_phase1_yara_milp as benchmark
 
@@ -24,6 +25,12 @@ class Phase1YaraBenchmarkHelpersTests(unittest.TestCase):
         self.assertFalse(config.enable_weather)
         self.assertEqual(config.capture_noise_std, 0.0)
         self.assertEqual(config.well_maintenance_rate_per_week, 0.0)
+
+    def test_policy_comparison_default_replans_daily(self):
+        with patch("sys.argv", ["benchmark_phase1_yara_milp.py"]):
+            args = benchmark.parse_args()
+
+        self.assertEqual(args.replan_every, 24)
 
 
 if __name__ == "__main__":

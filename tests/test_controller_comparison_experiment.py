@@ -14,30 +14,149 @@ class ControllerComparisonExperimentTests(unittest.TestCase):
             replan_every=12,
             progress=lambda _message: None,
             rolling_planning_horizon_h=96,
+            rolling_time_limit_s=30.0,
+            economics=compare.EconomicParameters(storage_shortfall_eur_per_t=0.0),
         )
         self.assertEqual(set(factories), {"idle", "greedy_shuttle", "rule_based", "rolling_milp"})
 
-    def test_rule_based_controller_factory_translates_to_discrete_env_action(self):
+    def test_controller_comparison_uses_one_economic_parameter_set(self):
         from experiments import compare_controllers_same_scenarios as compare
-        from sim.environment import VESSEL_WAIT, WELL_ACTIONS
+        from sim.scenario_generation import ScenarioConfig
+
+        economics = compare.EconomicParameters(storage_shortfall_eur_per_t=0.0)
+        env = compare.make_env(
+            cap_hours=2,
+            scenario_seed_config=ScenarioConfig(episode_hours=2, randomize_initial_inventory=False),
+            economics=economics,
+        )
+        factories = compare.controller_factories(
+            replan_every=12,
+            progress=lambda _message: None,
+            rolling_planning_horizon_h=168,
+            rolling_time_limit_s=30.0,
+            economics=economics,
+        )
+
+        rolling = factories["rolling_milp"](env)
+
+        self.assertEqual(env.cost_model.parameters.storage_shortfall_eur_per_t, 0.0)
+        self.assertEqual(rolling.economics.storage_shortfall_eur_per_t, 0.0)
+        self.assertEqual(rolling.time_limit_s, 30.0)
+
+    def test_rule_based_controller_factory_translates_to_hybrid_env_action(self):
+        from experiments import compare_controllers_same_scenarios as compare
+        from sim.environment import MAX_WELL_RATE_MTPA, MIN_WELL_RATE_MTPA, VESSEL_WAIT
         from sim.scenario_generation import ScenarioConfig
 
         factories = compare.controller_factories(
             replan_every=12,
             progress=lambda _message: None,
             rolling_planning_horizon_h=48,
+            rolling_time_limit_s=30.0,
+            economics=compare.EconomicParameters(),
         )
         env = compare.make_env(
             cap_hours=2,
             scenario_seed_config=ScenarioConfig(episode_hours=2, randomize_initial_inventory=False),
+            economics=compare.EconomicParameters(),
         )
         env.reset(seed=1)
 
         action = factories["rule_based"](env)(env)
 
-        self.assertEqual(len(action), len(env.action_dims))
-        self.assertEqual(action[: len(env.vessel_ids)], [VESSEL_WAIT] * len(env.vessel_ids))
-        self.assertEqual(action[len(env.vessel_ids):], [WELL_ACTIONS - 1, 1])
+        self.assertEqual(action["vessels"], [VESSEL_WAIT] * len(env.vessel_ids))
+        self.assertEqual(action["wells"], [MAX_WELL_RATE_MTPA, MIN_WELL_RATE_MTPA])
+
+    def test_metric_rows_and_summary_include_solve_time(self):
+        from experiments import compare_controllers_same_scenarios as compare
+        from sim.metrics import EpisodeMetrics
+
+        metrics = EpisodeMetrics(elapsed_hours=2, stored_t=10.0, total_cost=5.0)
+
+        row = compare.metric_row(
+            seed=1,
+            controller="idle",
+            metrics=metrics,
+            signature="sig",
+            solve_time_s=1.25,
+        )
+        summary = compare.summarize([row])
+
+        self.assertEqual(row["solve_time_s"], 1.25)
+        self.assertEqual(summary[0]["solve_time_s_mean"], 1.25)
+
+    def test_report_includes_solve_time(self):
+        from experiments import compare_controllers_same_scenarios as compare
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            report_path = Path(tmpdir) / "report.md"
+            compare.write_report(
+                report_path,
+                summary_rows=[
+                    {
+                        "controller": "idle",
+                        "elapsed_hours_mean": 2.0,
+                        "stored_t_mean": 0.0,
+                        "vented_t_mean": 1.0,
+                        "storage_shortfall_penalty_mean": 0.0,
+                        "total_cost_mean": 80.0,
+                        "operating_cost_mean": 0.0,
+                        "solve_time_s_mean": 1.25,
+                    }
+                ],
+                benchmark={
+                    "case": "static_milp_fixed_horizon_scenario_oracle",
+                    "horizon_h": 2,
+                    "status": "mocked",
+                    "stored_t": 0.0,
+                    "deliveries": 0,
+                    "vented_t": 1.0,
+                    "in_transit_t": 0.0,
+                    "shortfall_t": 0.0,
+                    "operating_cost": 0.0,
+                    "total_cost": 80.0,
+                    "cost_per_stored_t": 0.0,
+                    "solve_time_s": 2.5,
+                },
+            )
+
+            text = report_path.read_text(encoding="utf-8")
+
+        self.assertIn("Solve s mean", text)
+        self.assertIn("1.2", text)
+        self.assertIn("solve time: 2.5s", text)
+
+    def test_report_marks_invalid_static_milp_not_comparable(self):
+        from experiments import compare_controllers_same_scenarios as compare
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            report_path = Path(tmpdir) / "report.md"
+            compare.write_report(
+                report_path,
+                summary_rows=[],
+                benchmark={
+                    "case": "static_milp_fixed_horizon_scenario_oracle",
+                    "horizon_h": 2880,
+                    "status": "Not Solved",
+                    "solve_time_s": 442.4,
+                    "is_valid": False,
+                    "validation_error": "solver status Not Solved is not a validated integer solution",
+                    "stored_t": "",
+                    "deliveries": "",
+                    "vented_t": "",
+                    "in_transit_t": "",
+                    "shortfall_t": "",
+                    "operating_cost": "",
+                    "total_cost": "",
+                    "cost_per_stored_t": "",
+                },
+            )
+
+            text = report_path.read_text(encoding="utf-8")
+
+        self.assertIn("not comparable", text)
+        self.assertIn("Not Solved", text)
+        self.assertNotIn("stored:", text)
 
     def test_controller_comparison_cli_smoke_writes_outputs(self):
         from experiments import compare_controllers_same_scenarios as compare
@@ -72,6 +191,16 @@ class ControllerComparisonExperimentTests(unittest.TestCase):
 
         self.assertEqual(args.static_milp_time_limit_s, 600.0)
 
+    def test_rolling_milp_defaults_use_week_horizon_and_daily_execution(self):
+        from experiments import compare_controllers_same_scenarios as compare
+
+        with patch.object(sys, "argv", ["compare_controllers_same_scenarios.py"]):
+            args = compare.parse_args()
+
+        self.assertEqual(args.rolling_planning_horizon_h, 168)
+        self.assertEqual(args.rolling_replan_every, 24)
+        self.assertEqual(args.rolling_time_limit_s, 30.0)
+
     def test_fixed_horizon_cli_forwards_static_milp_solver_controls(self):
         from experiments import compare_controllers_same_scenarios as compare
 
@@ -91,6 +220,8 @@ class ControllerComparisonExperimentTests(unittest.TestCase):
                 "0.05",
                 "--static-milp-gap-abs",
                 "10",
+                "--storage-shortfall-penalty-eur-per-t",
+                "0",
                 "--output-dir",
                 str(output_dir),
             ]
@@ -99,9 +230,17 @@ class ControllerComparisonExperimentTests(unittest.TestCase):
                 "scenario_signature": "sig",
                 "horizon_h": 2,
                 "status": "mocked",
+                "is_valid": True,
+                "validation_error": "",
+                "max_binary_integrality_violation": 0.0,
                 "stored_t": 0.0,
                 "deliveries": 0,
+                "vented_t": 0.0,
+                "in_transit_t": 0.0,
+                "in_transit_growth_t": 0.0,
+                "shortfall_t": 0.0,
                 "operating_cost": 0.0,
+                "total_cost": 0.0,
                 "cost_per_stored_t": 0.0,
                 "time_limit_s": 123.0,
                 "mip_gap_rel": 0.05,
@@ -118,6 +257,7 @@ class ControllerComparisonExperimentTests(unittest.TestCase):
             self.assertEqual(fixed.call_args.args, (2, 123.0, 0.05, 10.0))
             self.assertEqual(fixed.call_args.kwargs["seed"], 1)
             self.assertIsNotNone(fixed.call_args.kwargs["scenario_seed_config"])
+            self.assertEqual(fixed.call_args.kwargs["economics"].storage_shortfall_eur_per_t, 0.0)
 
     def test_static_fixed_horizon_benchmark_passes_mip_gap_controls(self):
         from experiments import compare_controllers_same_scenarios as compare
@@ -125,9 +265,17 @@ class ControllerComparisonExperimentTests(unittest.TestCase):
 
         result = SimpleNamespace(
             status="mocked",
+            is_valid=True,
+            validation_error="",
+            max_binary_integrality_violation=0.0,
             stored_t=1.0,
             deliveries=1,
             operating_cost=2.0,
+            vented_t=3.0,
+            in_transit_t=6.0,
+            in_transit_growth_t=7.0,
+            shortfall_t=4.0,
+            total_cost=5.0,
             cost_per_stored_t=2.0,
         )
         with patch.object(compare, "solve_max_storage_fixed_horizon", return_value=result) as solve:
@@ -138,11 +286,18 @@ class ControllerComparisonExperimentTests(unittest.TestCase):
                 100.0,
                 scenario_seed_config=ScenarioConfig(episode_hours=720, randomize_initial_inventory=False),
                 seed=7,
+                economics=compare.EconomicParameters(storage_shortfall_eur_per_t=0.0),
             )
 
         self.assertEqual(row["case"], "static_milp_fixed_horizon_scenario_oracle")
         self.assertEqual(row["seed"], 7)
         self.assertEqual(row["scenario_signature"], compare.scenario_signature(solve.call_args.kwargs["scenario"]))
+        self.assertTrue(row["is_valid"])
+        self.assertEqual(row["vented_t"], 3.0)
+        self.assertEqual(row["in_transit_t"], 6.0)
+        self.assertEqual(row["in_transit_growth_t"], 7.0)
+        self.assertEqual(row["shortfall_t"], 4.0)
+        self.assertEqual(row["total_cost"], 5.0)
         self.assertEqual(row["mip_gap_rel"], 0.01)
         self.assertEqual(row["mip_gap_abs"], 100.0)
         solve.assert_called_once()
@@ -150,7 +305,44 @@ class ControllerComparisonExperimentTests(unittest.TestCase):
         self.assertEqual(solve.call_args.kwargs["time_limit_s"], 600.0)
         self.assertEqual(solve.call_args.kwargs["mip_gap_rel"], 0.01)
         self.assertEqual(solve.call_args.kwargs["mip_gap_abs"], 100.0)
+        self.assertEqual(solve.call_args.kwargs["economics"].storage_shortfall_eur_per_t, 0.0)
         self.assertEqual(solve.call_args.kwargs["scenario"].seed, 7)
+
+    def test_static_fixed_horizon_benchmark_blanks_invalid_solver_metrics(self):
+        from experiments import compare_controllers_same_scenarios as compare
+        from sim.scenario_generation import ScenarioConfig
+
+        result = SimpleNamespace(
+            status="Not Solved",
+            is_valid=False,
+            validation_error="solver status Not Solved is not a validated integer solution",
+            max_binary_integrality_violation=0.5,
+            stored_t=353_734.9,
+            deliveries=8,
+            operating_cost=824_048.0,
+            vented_t=0.0,
+            in_transit_t=49_465.1,
+            in_transit_growth_t=49_465.1,
+            shortfall_t=9_145.1,
+            total_cost=824_048.0,
+            cost_per_stored_t=2.33,
+        )
+        with patch.object(compare, "solve_max_storage_fixed_horizon", return_value=result):
+            row = compare.static_fixed_horizon_milp_benchmark(
+                2880,
+                300.0,
+                0.05,
+                None,
+                scenario_seed_config=ScenarioConfig(episode_hours=2880, randomize_initial_inventory=False),
+                seed=1,
+                economics=compare.EconomicParameters(storage_shortfall_eur_per_t=0.0),
+            )
+
+        self.assertFalse(row["is_valid"])
+        self.assertEqual(row["stored_t"], "")
+        self.assertEqual(row["deliveries"], "")
+        self.assertEqual(row["total_cost"], "")
+        self.assertIn("Not Solved", row["validation_error"])
 
     def test_fixed_target_cli_options_are_removed(self):
         from experiments import compare_controllers_same_scenarios as compare

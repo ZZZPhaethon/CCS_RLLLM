@@ -1,14 +1,14 @@
 """Fixed-horizon MILP benchmarks for CCS shipping and injection.
 
-This is a perfect-information benchmark for "store as much CO2 as possible in a
-given horizon", against which online controllers can be compared. It is an
-idealized upper bound: the terminal is modelled as a fluid buffer and unloads as
-scheduled deliveries, so the schedule is optimistic and not necessarily
-executable step-for-step in the simulator.
+This is a perfect-information benchmark for the same cost objective used by the
+online controllers: variable operating cost plus venting and storage-shortfall
+penalties. It is an idealized oracle: the terminal is modelled as a fluid buffer
+and unloads as scheduled deliveries, so the schedule is optimistic and not
+necessarily executable step-for-step in the simulator.
 
 Binding constraints captured (all derived from the same network the env uses):
 - injection capacity (pipeline / manifold / wells), the sustained-throughput cap;
-- single-berth unloading (one delivery per unload duration);
+- terminal berth unloading capacity;
 - per-vessel round-trip cadence and first-arrival startup delay;
 - terminal buffer capacity;
 - aggregate emitter capture inflow under flexible vessel-to-emitter assignment.
@@ -59,8 +59,23 @@ class FixedHorizonMilpResult:
     stored_t: float
     deliveries: int
     operating_cost: float
+    vented_t: float
+    in_transit_t: float
+    in_transit_growth_t: float
+    shortfall_t: float
+    total_cost: float
     cost_per_stored_t: float
     schedule: dict[str, list[int]]
+    is_valid: bool = True
+    validation_error: str = ""
+    max_binary_integrality_violation: float = 0.0
+
+
+@dataclass(frozen=True)
+class StaticSolutionValidation:
+    is_valid: bool
+    validation_error: str = ""
+    max_binary_integrality_violation: float = 0.0
 
 
 def extract_params(env) -> tuple[list[VesselParams], float, float, float]:
@@ -105,7 +120,7 @@ def solve_max_storage_fixed_horizon(
     scenario: Scenario | None = None,
     msg: bool = False,
 ) -> FixedHorizonMilpResult:
-    """Maximum safely stored CO2 over a fixed nominal horizon."""
+    """Cost-minimizing fixed-horizon oracle. The function name is legacy."""
     import pulp
 
     params = economics or EconomicParameters()
@@ -122,16 +137,23 @@ def solve_max_storage_fixed_horizon(
         )
 
     vessels, inj_cap, capture_rate, term_cap = extract_params(env)
+    source_cap = _source_buffer_capacity(env)
     H = int(horizon_h)
     hours = range(H)
 
-    prob = pulp.LpProblem("max_storage_fixed_horizon", pulp.LpMaximize)
+    prob = pulp.LpProblem("cost_fixed_horizon", pulp.LpMinimize)
     d = {
         (v.vessel_id, t): pulp.LpVariable(f"d_{v.vessel_id}_{t}", cat="Binary")
         for v in vessels
         for t in hours
     }
     inj = {t: pulp.LpVariable(f"inj_{t}", lowBound=0, upBound=inj_cap) for t in hours}
+    vent = {t: pulp.LpVariable(f"vent_{t}", lowBound=0) for t in hours}
+    source_stock = {
+        t: pulp.LpVariable(f"source_stock_{t}", lowBound=0, upBound=source_cap)
+        for t in hours
+    }
+    shortfall = pulp.LpVariable("storage_shortfall", lowBound=0)
 
     for v in vessels:
         for t in hours:
@@ -142,19 +164,29 @@ def solve_max_storage_fixed_horizon(
             window = [d[(v.vessel_id, k)] for k in range(t, min(t + v.round_trip_h, H))]
             prob += pulp.lpSum(window) <= 1
 
+    terminal_berths = _terminal_berth_count(env)
     unload_dur = max(v.unload_dur_h for v in vessels)
     for t in hours:
         window = [d[(v.vessel_id, k)] for v in vessels for k in range(t, min(t + unload_dur, H))]
-        prob += pulp.lpSum(window) <= 1
+        prob += pulp.lpSum(window) <= terminal_berths
 
     for t in hours:
         cum_deliv = pulp.lpSum(v.capacity_t * d[(v.vessel_id, k)] for v in vessels for k in range(t + 1))
         cum_inj = pulp.lpSum(inj[k] for k in range(t + 1))
+        cum_vent = pulp.lpSum(vent[k] for k in range(t + 1))
+        supply_t = initial_buffer_t + capture_rate * (t + 1)
         prob += cum_inj <= cum_deliv
         prob += cum_deliv - cum_inj <= term_cap
-        prob += cum_deliv <= initial_buffer_t + capture_rate * (t + 1)
+        prob += source_stock[t] == supply_t - cum_deliv - cum_vent
 
-    prob += pulp.lpSum(inj.values()) - 1e-4 * pulp.lpSum(d.values())
+    stored_expr = pulp.lpSum(inj.values())
+    captured_total_t = initial_buffer_t + capture_rate * H
+    prob += shortfall >= env.config.storage_target_rate * captured_total_t - stored_expr
+    prob += (
+        _schedule_cost_expression(vessels, d, stored_expr, params)
+        + pulp.lpSum(vent.values()) * params.carbon_price_eur_per_t
+        + shortfall * params.storage_shortfall_eur_per_t
+    )
     prob.solve(
         pulp.PULP_CBC_CMD(
             msg=1 if msg else 0,
@@ -171,15 +203,40 @@ def solve_max_storage_fixed_horizon(
     }
     n_deliveries = sum(len(s) for s in schedule.values())
     stored_t = float(sum(inj[t].value() or 0.0 for t in hours))
+    vented_t = float(sum(vent[t].value() or 0.0 for t in hours))
+    captured_from_operations_t = capture_rate * H
+    in_transit_growth_t = captured_from_operations_t - stored_t - vented_t
+    in_transit_t = max(0.0, initial_buffer_t + in_transit_growth_t)
+    shortfall_t = float(shortfall.value() or 0.0)
     cost = _schedule_cost(vessels, schedule, float(H), stored_t, params)
+    total_cost = cost + vented_t * params.carbon_price_eur_per_t + shortfall_t * params.storage_shortfall_eur_per_t
+    max_storable_from_deliveries_t = sum(v.capacity_t * len(schedule[v.vessel_id]) for v in vessels)
+    validation = _validate_static_solution(
+        status=status,
+        binary_values=[d[(v.vessel_id, t)].value() for v in vessels for t in hours],
+        stored_t=stored_t,
+        vented_t=vented_t,
+        in_transit_t=in_transit_t,
+        captured_from_operations_t=captured_from_operations_t,
+        initial_in_transit_t=initial_buffer_t,
+        max_storable_from_deliveries_t=max_storable_from_deliveries_t,
+    )
     return FixedHorizonMilpResult(
         status=status,
         horizon_h=H,
         stored_t=stored_t,
         deliveries=n_deliveries,
         operating_cost=cost,
+        vented_t=vented_t,
+        in_transit_t=in_transit_t,
+        in_transit_growth_t=in_transit_growth_t,
+        shortfall_t=shortfall_t,
+        total_cost=total_cost,
         cost_per_stored_t=cost / stored_t if stored_t > 0 else float("nan"),
         schedule=schedule,
+        is_valid=validation.is_valid,
+        validation_error=validation.validation_error,
+        max_binary_integrality_violation=validation.max_binary_integrality_violation,
     )
 
 
@@ -194,7 +251,7 @@ def _solve_max_storage_fixed_horizon_with_scenario(
     mip_gap_abs: float | None,
     msg: bool,
 ) -> FixedHorizonMilpResult:
-    """Perfect-foresight fixed-horizon MILP for one sampled disturbance scenario."""
+    """Cost-minimizing perfect-foresight MILP for one sampled scenario."""
     import pulp
 
     vessels, nominal_inj_cap, _capture_rate, term_cap = extract_params(env)
@@ -207,8 +264,14 @@ def _solve_max_storage_fixed_horizon_with_scenario(
             stored_t=0.0,
             deliveries=0,
             operating_cost=0.0,
+            vented_t=0.0,
+            in_transit_t=0.0,
+            in_transit_growth_t=0.0,
+            shortfall_t=0.0,
+            total_cost=0.0,
             cost_per_stored_t=float("nan"),
             schedule={v.vessel_id: [] for v in vessels},
+            is_valid=True,
         )
 
     initial_inventory = scenario.initial_inventory_t
@@ -222,17 +285,24 @@ def _solve_max_storage_fixed_horizon_with_scenario(
         sum(source_supply[eid][t] for eid in env.emitter_ids)
         for t in hours
     ]
+    source_cap = _source_buffer_capacity(env)
     inj_cap_by_hour = [_scenario_injection_cap(env, scenario, t, nominal_inj_cap) for t in hours]
     berth_count_by_hour = [_scenario_berth_count(env, scenario, t) for t in hours]
 
     departures = _scenario_departure_options(env, vessels, scenario, H)
 
-    prob = pulp.LpProblem("max_storage_fixed_horizon_scenario", pulp.LpMaximize)
+    prob = pulp.LpProblem("cost_fixed_horizon_scenario", pulp.LpMinimize)
     d = {
         key: pulp.LpVariable(f"depart_{key[0]}_{key[1]}", cat="Binary")
         for key in departures
     }
     inj = {t: pulp.LpVariable(f"inj_{t}", lowBound=0, upBound=nominal_inj_cap) for t in hours}
+    vent = {t: pulp.LpVariable(f"vent_{t}", lowBound=0) for t in hours}
+    source_stock = {
+        t: pulp.LpVariable(f"source_stock_{t}", lowBound=0, upBound=source_cap)
+        for t in hours
+    }
+    shortfall = pulp.LpVariable("storage_shortfall", lowBound=0)
 
     for t in hours:
         prob += inj[t] <= inj_cap_by_hour[t]
@@ -272,11 +342,20 @@ def _solve_max_storage_fixed_horizon_with_scenario(
         ]
         cum_unload = pulp.lpSum(unloaded_by_t)
         cum_inj = pulp.lpSum(inj[k] for k in range(t + 1))
+        cum_loaded = pulp.lpSum(loaded_by_t)
+        cum_vent = pulp.lpSum(vent[k] for k in range(t + 1))
         prob += cum_inj <= term_init_t + cum_unload
         prob += term_init_t + cum_unload - cum_inj <= term_cap
-        prob += pulp.lpSum(loaded_by_t) <= total_supply[t]
+        prob += source_stock[t] == total_supply[t] - cum_loaded - cum_vent
 
-    prob += pulp.lpSum(inj.values()) - 1e-4 * pulp.lpSum(d.values())
+    stored_expr = pulp.lpSum(inj.values())
+    captured_total_t = total_supply[-1] if total_supply else 0.0
+    prob += shortfall >= env.config.storage_target_rate * captured_total_t - stored_expr
+    prob += (
+        _departure_cost_expression(vessels, d, stored_expr, params)
+        + pulp.lpSum(vent.values()) * params.carbon_price_eur_per_t
+        + shortfall * params.storage_shortfall_eur_per_t
+    )
     prob.solve(
         pulp.PULP_CBC_CMD(
             msg=1 if msg else 0,
@@ -294,16 +373,47 @@ def _solve_max_storage_fixed_horizon_with_scenario(
     for times in schedule.values():
         times.sort()
     stored_t = float(sum(inj[t].value() or 0.0 for t in hours))
+    vented_t = float(sum(vent[t].value() or 0.0 for t in hours))
+    source_initial_total_t = sum(source_initial_t.values())
+    initial_in_transit_t = source_initial_total_t + term_init_t
+    captured_from_operations_t = captured_total_t - source_initial_total_t
+    in_transit_growth_t = captured_from_operations_t - stored_t - vented_t
+    in_transit_t = max(0.0, initial_in_transit_t + in_transit_growth_t)
+    shortfall_t = float(shortfall.value() or 0.0)
     n_deliveries = sum(len(times) for times in schedule.values())
     cost = _schedule_cost(vessels, schedule, float(H), stored_t, params)
+    total_cost = cost + vented_t * params.carbon_price_eur_per_t + shortfall_t * params.storage_shortfall_eur_per_t
+    by_id = {v.vessel_id: v for v in vessels}
+    max_storable_from_deliveries_t = term_init_t + sum(
+        by_id[vessel_id].capacity_t * len(times)
+        for vessel_id, times in schedule.items()
+    )
+    validation = _validate_static_solution(
+        status=status,
+        binary_values=[d[key].value() for key in departures],
+        stored_t=stored_t,
+        vented_t=vented_t,
+        in_transit_t=in_transit_t,
+        captured_from_operations_t=captured_from_operations_t,
+        initial_in_transit_t=initial_in_transit_t,
+        max_storable_from_deliveries_t=max_storable_from_deliveries_t,
+    )
     return FixedHorizonMilpResult(
         status=status,
         horizon_h=H,
         stored_t=stored_t,
         deliveries=n_deliveries,
         operating_cost=cost,
+        vented_t=vented_t,
+        in_transit_t=in_transit_t,
+        in_transit_growth_t=in_transit_growth_t,
+        shortfall_t=shortfall_t,
+        total_cost=total_cost,
         cost_per_stored_t=cost / stored_t if stored_t > 0 else float("nan"),
         schedule=schedule,
+        is_valid=validation.is_valid,
+        validation_error=validation.validation_error,
+        max_binary_integrality_violation=validation.max_binary_integrality_violation,
     )
 
 
@@ -366,6 +476,68 @@ def _scenario_departure_options(
     return options
 
 
+def _validate_static_solution(
+    *,
+    status: str,
+    binary_values,
+    stored_t: float,
+    vented_t: float,
+    in_transit_t: float,
+    captured_from_operations_t: float,
+    initial_in_transit_t: float,
+    max_storable_from_deliveries_t: float,
+    integrality_tol: float = 1e-6,
+    mass_tol: float = 1e-4,
+) -> StaticSolutionValidation:
+    values = list(binary_values)
+    numeric_values = [float(value) for value in values if value is not None]
+    if len(numeric_values) != len(values):
+        return StaticSolutionValidation(False, "missing binary variable value", float("inf"))
+
+    max_integrality = 0.0
+    if numeric_values:
+        max_integrality = max(abs(value - round(value)) for value in numeric_values)
+
+    if status != "Optimal":
+        return StaticSolutionValidation(
+            False,
+            f"solver status {status} is not a validated integer solution",
+            max_integrality,
+        )
+    if max_integrality > integrality_tol:
+        return StaticSolutionValidation(
+            False,
+            f"binary integrality violation {max_integrality:.3g} exceeds tolerance {integrality_tol:g}",
+            max_integrality,
+        )
+
+    if min(stored_t, vented_t, in_transit_t) < -mass_tol:
+        return StaticSolutionValidation(False, "negative mass variable in static MILP result", max_integrality)
+
+    lhs = initial_in_transit_t + captured_from_operations_t
+    rhs = stored_t + vented_t + in_transit_t
+    balance_tol = max(mass_tol, mass_tol * max(1.0, abs(lhs)))
+    if abs(lhs - rhs) > balance_tol:
+        return StaticSolutionValidation(
+            False,
+            f"mass balance violation: input {lhs:.6g} t != output {rhs:.6g} t",
+            max_integrality,
+        )
+
+    capacity_tol = max(mass_tol, mass_tol * max(1.0, max_storable_from_deliveries_t))
+    if stored_t - max_storable_from_deliveries_t > capacity_tol:
+        return StaticSolutionValidation(
+            False,
+            (
+                "stored mass exceeds delivered/initial-terminal capacity: "
+                f"{stored_t:.6g} t > {max_storable_from_deliveries_t:.6g} t"
+            ),
+            max_integrality,
+        )
+
+    return StaticSolutionValidation(True, "", max_integrality)
+
+
 def _unload_profile(vessel: VesselParams) -> list[float]:
     profile = []
     remaining = vessel.capacity_t
@@ -403,6 +575,62 @@ def _scenario_series_value(series_by_id, entity_id: str, t: int, default):
     return series[index]
 
 
+def _source_buffer_capacity(env) -> float:
+    return sum(
+        emitter.buffer_capacity_t
+        for emitter in env.network._entities_of_type(Emitter).values()
+    )
+
+
+def _terminal_berth_count(env) -> int:
+    return max(
+        0,
+        sum(int(terminal.berth_count) for terminal in env.network._entities_of_type(Terminal).values()),
+    )
+
+
+def _schedule_cost_expression(
+    vessels: list[VesselParams],
+    delivery_vars,
+    stored_expr,
+    params: EconomicParameters,
+):
+    import pulp
+
+    by_id = {v.vessel_id: v for v in vessels}
+    per_delivery = pulp.lpSum(
+        (
+            2 * by_id[vid].sail_h * params.vessel_fuel_eur_per_h_sailing
+            + by_id[vid].capacity_t * params.conditioning_eur_per_t
+            + (by_id[vid].load_dur_h + by_id[vid].unload_dur_h) * params.hoteling_fuel_eur_per_h
+        )
+        * var
+        for (vid, _delivery_h), var in delivery_vars.items()
+    )
+    return per_delivery + stored_expr * params.reconditioning_eur_per_t
+
+
+def _departure_cost_expression(
+    vessels: list[VesselParams],
+    departure_vars,
+    stored_expr,
+    params: EconomicParameters,
+):
+    import pulp
+
+    by_id = {v.vessel_id: v for v in vessels}
+    per_departure = pulp.lpSum(
+        (
+            2 * by_id[vid].sail_h * params.vessel_fuel_eur_per_h_sailing
+            + by_id[vid].capacity_t * params.conditioning_eur_per_t
+            + (by_id[vid].load_dur_h + by_id[vid].unload_dur_h) * params.hoteling_fuel_eur_per_h
+        )
+        * var
+        for (vid, _depart_h), var in departure_vars.items()
+    )
+    return per_departure + stored_expr * params.reconditioning_eur_per_t
+
+
 def _schedule_cost(
     vessels: list[VesselParams],
     schedule: dict[str, list[int]],
@@ -410,10 +638,13 @@ def _schedule_cost(
     stored_t: float,
     params: EconomicParameters,
 ) -> float:
-    charter = len(vessels) * params.vessel_charter_eur_per_h * horizon_h
     sail_hours = sum(2 * v.sail_h * len(schedule[v.vessel_id]) for v in vessels)
     fuel = sail_hours * params.vessel_fuel_eur_per_h_sailing
-    handled_t = sum(2 * v.capacity_t * len(schedule[v.vessel_id]) for v in vessels)
-    handling = handled_t * params.handling_eur_per_t
-    injection = stored_t * params.injection_cost_eur_per_t
-    return charter + fuel + handling + injection
+    loaded_t = sum(v.capacity_t * len(schedule[v.vessel_id]) for v in vessels)
+    conditioning = loaded_t * params.conditioning_eur_per_t
+    reconditioning = stored_t * params.reconditioning_eur_per_t
+    loading_h = sum(v.load_dur_h * len(schedule[v.vessel_id]) for v in vessels)
+    unloading_h = sum(v.unload_dur_h * len(schedule[v.vessel_id]) for v in vessels)
+    loading = loading_h * params.hoteling_fuel_eur_per_h
+    unloading = unloading_h * params.hoteling_fuel_eur_per_h
+    return fuel + conditioning + reconditioning + loading + unloading

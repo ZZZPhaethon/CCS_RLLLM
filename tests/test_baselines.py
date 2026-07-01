@@ -34,7 +34,8 @@ class GreedyBaselineTests(unittest.TestCase):
 
         action = greedy_shuttle_policy(env)
 
-        self.assertEqual(action[0], env.vessel_go_emitter_action(other))
+        self.assertEqual(action["vessels"][0], env.vessel_go_emitter_action(other))
+        self.assertEqual(len(action["wells"]), len(env.well_ids))
 
 
 if __name__ == "__main__":
