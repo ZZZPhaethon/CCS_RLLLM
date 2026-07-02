@@ -640,6 +640,7 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
       vesselLayer.clearLayers();
       drawRoutes(frame);
       drawReturnRoutes(frame);
+      drawDynamicLegRoutes(frame);
       drawPipelines(frame);
       drawInjectionLinks(frame);
       drawFacilities(frame);
@@ -673,6 +674,9 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
       Object.values(data.map.locations).forEach(location => bounds.extend([location.lat, location.lon]));
       Object.values(data.map.routes).forEach(route => {{
         route.coordinates.forEach(([lat, lon]) => bounds.extend([lat, lon]));
+        Object.values(route.dynamic_leg_routes || {{}}).forEach(leg => {{
+          leg.coordinates.forEach(([lat, lon]) => bounds.extend([lat, lon]));
+        }});
       }});
       (data.map.pipeline_segments || []).forEach(segment => {{
         segment.coordinates.forEach(([lat, lon]) => bounds.extend([lat, lon]));
@@ -747,6 +751,22 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
         }})
           .bindTooltip(`${{route.vessel_id}} Return leg<br>same corridor assumed<br>${{route.distance_km}} km`, {{className: "vessel-tooltip"}})
           .addTo(routeLayer);
+      }});
+    }}
+
+    function drawDynamicLegRoutes(frame) {{
+      Object.values(data.map.routes).forEach(route => {{
+        const active = route.vessel_id === selected;
+        Object.entries(route.dynamic_leg_routes || {{}}).forEach(([legId, leg]) => {{
+          L.polyline(leg.coordinates, {{
+            color: active ? "#0f766e" : "#0891b2",
+            weight: active ? 4 : 3,
+            opacity: active ? 0.88 : 0.58,
+            dashArray: "10 8"
+          }})
+            .bindTooltip(`${{escapeHtml(route.vessel_id)}} dynamic leg<br>${{escapeHtml(legId)}}<br>${{leg.distance_km}} km`, {{className: "vessel-tooltip"}})
+            .addTo(routeLayer);
+        }});
       }});
     }}
 
@@ -1017,6 +1037,7 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
         return 0;
       }}
       if (metric === "injection_rate") {{
+        if (entity.injection_rate_tph !== undefined) return Number(entity.injection_rate_tph);
         if (entity.line_source_rate_tph !== undefined) return Number(entity.line_source_rate_tph);
         if (entity.line_source_well_rates_tph) {{
           return Object.values(entity.line_source_well_rates_tph).reduce((sum, value) => sum + Number(value || 0), 0);

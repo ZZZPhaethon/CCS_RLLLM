@@ -26,6 +26,7 @@ SCENARIO_ROOT = ROOT / "scenarios"
 CAPTURE_RATE_ROOT = ROOT / "data" / "capture_rates"
 NORTHERN_LIGHTS_PHASE1_DATA_PATH = SCENARIO_ROOT / "northern_lights_phase1.json"
 NORTHERN_LIGHTS_PHASE2_DATA_PATH = SCENARIO_ROOT / "northern_lights_phase2_scenario.json"
+TOY_DATA_PATH = SCENARIO_ROOT / "toy.json"
 NORTHERN_LIGHTS_PHASE1_CAPTURE_PROFILE_PATH = CAPTURE_RATE_ROOT / "phase1plus_emitters_capture_rate_profile_hourly.csv"
 
 
@@ -36,6 +37,11 @@ def _load_phase1_data() -> dict:
 
 def _load_phase2_data() -> dict:
     with NORTHERN_LIGHTS_PHASE2_DATA_PATH.open(encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def _load_toy_data() -> dict:
+    with TOY_DATA_PATH.open(encoding="utf-8") as handle:
         return json.load(handle)
 
 
@@ -87,6 +93,19 @@ def build_northern_lights_phase2_demo() -> tuple[PhysicalNetwork, PhysicalState]
     """
 
     return _build_network_from_scenario_data(_load_phase2_data())
+
+
+def build_toy_demo() -> tuple[PhysicalNetwork, PhysicalState]:
+    """Two-emitter toy comparison scenario used by controller experiments."""
+
+    return _build_network_from_scenario_data(_load_toy_data())
+
+
+def toy_locations() -> dict[str, tuple[float, float]]:
+    return {
+        location_id: _coordinate(values)
+        for location_id, values in _load_toy_data()["locations"].items()
+    }
 
 
 def _build_network_from_scenario_data(

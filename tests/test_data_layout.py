@@ -13,8 +13,10 @@ class DataLayoutTests(unittest.TestCase):
 
         self.assertEqual(scenarios.NORTHERN_LIGHTS_PHASE1_DATA_PATH, scenario_dir / "northern_lights_phase1.json")
         self.assertEqual(scenarios.NORTHERN_LIGHTS_PHASE2_DATA_PATH, scenario_dir / "northern_lights_phase2_scenario.json")
+        self.assertEqual(getattr(scenarios, "TOY_DATA_PATH", None), scenario_dir / "toy.json")
         self.assertTrue(scenarios.NORTHERN_LIGHTS_PHASE1_DATA_PATH.exists())
         self.assertTrue(scenarios.NORTHERN_LIGHTS_PHASE2_DATA_PATH.exists())
+        self.assertTrue(scenarios.TOY_DATA_PATH.exists())
         self.assertFalse((ROOT / "data" / "northern_lights_phase1_demo.json").exists())
         self.assertFalse((ROOT / "data" / "northern_lights_phase1_plus_yara_2026.json").exists())
 

@@ -7,7 +7,7 @@ from .actions import ActionFrame, ActionResolver, CommittedActionFrame
 from .scenario_generation.disturbance_resolver import vessel_speed_factor
 from .entities.state import PhysicalState, StepResult
 from .network import PhysicalNetwork
-from .routes import route_distance_km
+from .routes import route_distance_km, sea_route
 
 Coordinate = tuple[float, float]
 
@@ -205,7 +205,44 @@ class PhysicalSimulator:
             return route["coordinates"]
         if origin == route["destination"] and destination == route["origin"]:
             return route["return_coordinates"]
-        return [self._location_tuple(origin, route), self._location_tuple(destination, route)]
+        return self._dynamic_leg_route(route, origin, destination)["coordinates"]
+
+    def _dynamic_leg_route(self, route: dict[str, Any], origin: str, destination: str) -> dict[str, Any]:
+        leg_routes = route.setdefault("dynamic_leg_routes", {})
+        leg_id = f"{origin}->{destination}"
+        if leg_id not in leg_routes:
+            origin_coordinate = self._location_tuple(origin, route)
+            destination_coordinate = self._location_tuple(destination, route)
+            maritime_route = sea_route(origin_coordinate, destination_coordinate)
+            coordinates = self._connect_route_to_endpoints(
+                maritime_route.coordinates,
+                origin_coordinate,
+                destination_coordinate,
+            )
+            leg_routes[leg_id] = {
+                "id": leg_id,
+                "origin": origin,
+                "destination": destination,
+                "provider": maritime_route.provider,
+                "distance_km": round(route_distance_km(coordinates), 2),
+                "coordinates": coordinates,
+            }
+        return leg_routes[leg_id]
+
+    @staticmethod
+    def _connect_route_to_endpoints(
+        coordinates: list[Coordinate],
+        origin: Coordinate,
+        destination: Coordinate,
+    ) -> list[Coordinate]:
+        connected = list(coordinates)
+        if not connected:
+            return [origin, destination]
+        if connected[0] != origin:
+            connected.insert(0, origin)
+        if connected[-1] != destination:
+            connected.append(destination)
+        return connected
 
     def _location_tuple(self, location_id: str, route: dict[str, Any]) -> Coordinate:
         if location_id in self.locations:

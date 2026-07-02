@@ -1,3 +1,4 @@
+import math
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -10,12 +11,13 @@ except ImportError:
     HAVE_PULP = False
 
 from sim.control.baselines import greedy_shuttle_policy
-from sim.control.rolling_milp import RollingMilpController, _plan_explicit_actions
+from sim.control.rolling_milp import RollingMilpController, _plan_explicit_actions, _sail_hours_between
 from sim.economics import EconomicParameters
 from sim.entities import Emitter, InjectionWell, Pipeline, Reservoir, SubseaManifold, Terminal, Vessel
 from sim.environment import CCSEnv, CCSEnvConfig, MAX_WELL_RATE_MTPA, MIN_WELL_RATE_MTPA, VESSEL_WAIT
 from sim.metrics import run_episode
 from sim.network import PhysicalNetwork
+from sim.routes import route_distance_km, sea_route
 from sim.scenario_generation import ScenarioConfig, ScenarioGenerator
 from tests.fixtures.toy_networks import TOY_TWO_SOURCE_LOCATIONS, make_toy_two_source_network
 
@@ -97,7 +99,7 @@ def _two_source_one_ship_fast_env() -> CCSEnv:
     network = PhysicalNetwork(time_step_hours=1.0)
     network.add_entity(Emitter("source_a", nominal_capture_tph=0.0, buffer_capacity_t=2_000.0))
     network.add_entity(Emitter("source_b", nominal_capture_tph=0.0, buffer_capacity_t=2_000.0))
-    network.add_entity(Vessel("ship", capacity_t=500.0, loading_rate_tph=500.0, unloading_rate_tph=500.0, speed_knots=1.0))
+    network.add_entity(Vessel("ship", capacity_t=500.0, loading_rate_tph=500.0, unloading_rate_tph=500.0, speed_knots=100000.0))
     network.add_entity(Terminal("terminal", storage_capacity_t=2_000.0, berth_count=1))
     network.add_entity(Pipeline("pipeline", max_flow_tph=500.0, ramp_tph=500.0))
     network.add_entity(SubseaManifold("manifold", max_flow_tph=500.0))
@@ -111,13 +113,17 @@ def _two_source_one_ship_fast_env() -> CCSEnv:
     network.connect("well", "reservoir")
     return CCSEnv(
         network,
-        {"source_a": (0.0, 0.0), "source_b": (0.0, 1.0), "terminal": (0.0, 2.0)},
+        {
+            "source_a": (59.05, 9.70),
+            "source_b": (59.86, 10.84),
+            "terminal": (60.58, 4.84),
+        },
         scenario_generator=ScenarioGenerator(
             config=ScenarioConfig(episode_hours=12, randomize_initial_inventory=False)
         ),
         config=CCSEnvConfig(episode_hours=12),
         routes={
-            "ship": {"origin": "source_a", "destination": "terminal", "distance_km": 1.852, "speed_knots": 100.0},
+            "ship": {"origin": "source_a", "destination": "terminal", "distance_km": 1.852, "speed_knots": 100000.0},
         },
     )
 
@@ -220,6 +226,19 @@ class RollingMilpInterfaceTests(unittest.TestCase):
             action = RollingMilpController(env, replan_every=12).policy(env)
 
         self.assertEqual(action["vessels"][env.vessel_ids.index(vessel_id)], planned_action)
+
+    def test_planner_sailing_hours_between_emitters_uses_maritime_route(self):
+        env = _cold_env(cap_hours=24)
+        env.reset(seed=1)
+        vessel_id = "vessel_a"
+        speed_knots = float(env._routes[vessel_id]["speed_knots"])
+        source_a = TOY_TWO_SOURCE_LOCATIONS["source_a"]
+        source_b = TOY_TWO_SOURCE_LOCATIONS["source_b"]
+        expected_hours = max(1, math.ceil(sea_route(source_a, source_b).distance_km / (speed_knots * 1.852)))
+        direct_hours = max(1, math.ceil(route_distance_km([source_a, source_b]) / (speed_knots * 1.852)))
+
+        self.assertGreater(expected_hours, direct_hours)
+        self.assertEqual(_sail_hours_between(env, "source_a", "source_b", vessel_id), expected_hours)
 
 
 @unittest.skipUnless(HAVE_PULP, "pulp/CBC not installed")

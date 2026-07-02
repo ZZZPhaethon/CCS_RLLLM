@@ -23,7 +23,6 @@ from sim.control.baselines import greedy_shuttle_policy, idle_policy
 from sim.control.milp import solve_max_storage_fixed_horizon
 from sim.control.rule_based import RuleBasedActionGenerator
 from sim.control.rolling_milp import RollingMilpController
-from sim.entities import Emitter, InjectionWell, Pipeline, Reservoir, SubseaManifold, Terminal, Vessel
 from sim.environment import (
     CCSEnv,
     CCSEnvConfig,
@@ -33,72 +32,11 @@ from sim.environment import (
     VESSEL_WAIT,
 )
 from sim.metrics import EpisodeMetrics, run_episode
-from sim.network import PhysicalNetwork
+from sim.network_scenarios import build_toy_demo, toy_locations
 from sim.scenario_generation import Scenario, ScenarioConfig, ScenarioGenerator
 
 ProgressLogger = Callable[[str], None]
 PolicyFactory = Callable[[CCSEnv], Callable[[CCSEnv], dict[str, list]]]
-
-TOY_LOCATIONS = {
-    "brevik": (59.05, 9.70),
-    "oslo": (59.86, 10.84),
-    "oygarden": (60.58, 4.84),
-}
-
-VESSEL_CAPACITY_T = 7_500.0
-EMITTER_BUFFER_CAPACITY_T = 15_000.0
-TERMINAL_STORAGE_CAPACITY_T = 15_000.0
-
-
-def build_toy_network() -> PhysicalNetwork:
-    """Small two-emitter/two-ship network used by controller comparisons."""
-    network = PhysicalNetwork(time_step_hours=1.0)
-    network.add_entity(Emitter("brevik", nominal_capture_tph=80.0, buffer_capacity_t=EMITTER_BUFFER_CAPACITY_T))
-    network.add_entity(Emitter("oslo", nominal_capture_tph=60.0, buffer_capacity_t=EMITTER_BUFFER_CAPACITY_T))
-    network.add_entity(
-        Vessel(
-            "ship_1",
-            capacity_t=VESSEL_CAPACITY_T,
-            loading_rate_tph=800.0,
-            unloading_rate_tph=800.0,
-            speed_knots=12.0,
-        )
-    )
-    network.add_entity(
-        Vessel(
-            "ship_2",
-            capacity_t=VESSEL_CAPACITY_T,
-            loading_rate_tph=800.0,
-            unloading_rate_tph=800.0,
-            speed_knots=12.0,
-        )
-    )
-    network.add_entity(Terminal("oygarden", storage_capacity_t=TERMINAL_STORAGE_CAPACITY_T, berth_count=2))
-    network.add_entity(Pipeline("pipeline", max_flow_tph=400.0, ramp_tph=400.0))
-    network.add_entity(SubseaManifold("manifold", max_flow_tph=400.0))
-    network.add_entity(InjectionWell("well_1", max_injection_tph=200.0))
-    network.add_entity(InjectionWell("well_2", max_injection_tph=200.0))
-    network.add_entity(
-        Reservoir(
-            "aurora",
-            storage_capacity_t=1e7,
-            initial_pressure_bar=100.0,
-            pressure_at_capacity_bar=200.0,
-            max_pressure_bar=200.0,
-        )
-    )
-    network.connect("brevik", "ship_1")
-    network.connect("oslo", "ship_2")
-    network.connect("ship_1", "oygarden")
-    network.connect("ship_2", "oygarden")
-    network.connect("oygarden", "pipeline")
-    network.connect("pipeline", "manifold")
-    network.connect("manifold", "well_1")
-    network.connect("manifold", "well_2")
-    network.connect("well_1", "aurora")
-    network.connect("well_2", "aurora")
-    return network
-
 
 def make_env(
     *,
@@ -106,9 +44,10 @@ def make_env(
     scenario_seed_config: ScenarioConfig,
     economics: EconomicParameters | None = None,
 ) -> CCSEnv:
+    network, _state = build_toy_demo()
     return CCSEnv(
-        build_toy_network(),
-        TOY_LOCATIONS,
+        network,
+        toy_locations(),
         scenario_generator=ScenarioGenerator(config=scenario_seed_config),
         cost_model=CostModel(economics),
         config=CCSEnvConfig(episode_hours=cap_hours),

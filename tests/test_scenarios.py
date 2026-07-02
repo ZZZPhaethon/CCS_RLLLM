@@ -3,6 +3,7 @@ import json
 import unittest
 
 from sim.entities import Emitter, InjectionWell, Pipeline, Reservoir, SubseaManifold, Terminal, Vessel
+import sim.network_scenarios as scenarios
 from sim.routes import route_distance_km
 from sim.network_scenarios import (
     EOS_SUBSEA_TEMPLATE_LOCATION,
@@ -175,6 +176,31 @@ class ScenarioTests(unittest.TestCase):
         self.assertAlmostEqual(pipeline.max_flow_tph, expected_tph)
         for well in wells:
             self.assertAlmostEqual(well.max_injection_tph, expected_tph)
+
+    def test_toy_scenario_is_external_data_with_one_well(self):
+        build_toy_demo = getattr(scenarios, "build_toy_demo", None)
+        toy_locations = getattr(scenarios, "toy_locations", None)
+        self.assertTrue(callable(build_toy_demo))
+        self.assertTrue(callable(toy_locations))
+
+        network, state = build_toy_demo()
+        locations = toy_locations()
+        with scenarios.TOY_DATA_PATH.open(encoding="utf-8") as handle:
+            payload = json.load(handle)
+
+        wells = [entity for entity in network.entities.values() if isinstance(entity, InjectionWell)]
+        pipeline = network.entities["pipeline"]
+
+        self.assertEqual(payload["scenario_id"], "toy")
+        self.assertEqual(len(wells), 1)
+        self.assertIn("well_1", network.entities)
+        self.assertNotIn("well_2", network.entities)
+        self.assertEqual(network.downstream_of("manifold"), ["well_1"])
+        self.assertEqual(network.downstream_of("well_1"), ["aurora"])
+        self.assertIsInstance(pipeline, Pipeline)
+        self.assertEqual(len(pipeline.route_coordinates), len(payload["offshore_pipeline_route"]))
+        self.assertEqual(locations["brevik"], (59.05, 9.7))
+        self.assertEqual(state.entity_inventory_t["well_1"], 0.0)
 
 
 if __name__ == "__main__":

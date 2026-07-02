@@ -17,6 +17,7 @@ from ..network_scenarios import (
     NATURGASSPARKEN,
     NORTHERN_LIGHTS_PHASE1_DATA_PATH,
     NORTHERN_LIGHTS_PHASE2_DATA_PATH,
+    OFFSHORE_PIPELINE_ROUTE,
     build_northern_lights_phase1_demo,
     build_northern_lights_phase2_demo,
 )
@@ -366,22 +367,38 @@ def _densify_route(coordinates: list[Coordinate], max_segment_km: float) -> list
 def _build_pipeline_segments(network: Any, locations: dict[str, dict[str, float | str]]) -> list[dict[str, Any]]:
     segments: list[dict[str, Any]] = []
     for pipeline_id, pipeline in network.entities.items():
-        if not isinstance(pipeline, Pipeline) or not pipeline.route_coordinates:
+        if not isinstance(pipeline, Pipeline):
             continue
         upstream_terminal = _first_upstream_of_type(network, pipeline_id, Terminal)
-        downstream_manifold = network.downstream_of(pipeline_id)[0] if network.downstream_of(pipeline_id) else None
-        if upstream_terminal is None or downstream_manifold is None:
+        downstream_target = network.downstream_of(pipeline_id)[0] if network.downstream_of(pipeline_id) else None
+        if upstream_terminal is None or downstream_target is None:
             continue
+        coordinates = list(pipeline.route_coordinates) or _fallback_pipeline_coordinates(
+            upstream_terminal,
+            pipeline_id,
+            downstream_target,
+            locations,
+        )
+        segment_id = (
+            "naturgassparken_to_eos_subsea_manifold"
+            if pipeline.route_coordinates
+            else f"{upstream_terminal}_to_{downstream_target}"
+        )
+        label = (
+            "Offshore pipeline from Naturgassparken to 31/5-7 EOS subsea manifold"
+            if pipeline.route_coordinates
+            else f"Pipeline from {upstream_terminal} to {downstream_target}"
+        )
         segments.append(
             {
-                "id": "naturgassparken_to_eos_subsea_manifold",
+                "id": segment_id,
                 "pipeline_id": pipeline.entity_id,
                 "component_id": pipeline.entity_id,
                 "source": upstream_terminal,
-                "target": downstream_manifold,
-                "label": "Offshore pipeline from Naturgassparken to 31/5-7 EOS subsea manifold",
+                "target": downstream_target,
+                "label": label,
                 "color": pipeline.route_color or "#ff0000",
-                "coordinates": pipeline.route_coordinates,
+                "coordinates": coordinates,
                 "length_km": pipeline.length_km,
             }
         )
@@ -407,6 +424,18 @@ def _build_pipeline_segments(network: Any, locations: dict[str, dict[str, float 
                 }
             )
     return segments
+
+
+def _fallback_pipeline_coordinates(
+    upstream_id: str,
+    pipeline_id: str,
+    downstream_id: str,
+    locations: dict[str, dict[str, float | str]],
+) -> list[Coordinate]:
+    coordinates = list(OFFSHORE_PIPELINE_ROUTE)
+    coordinates[0] = _location_tuple(upstream_id, locations)
+    coordinates[-1] = _location_tuple(downstream_id, locations)
+    return coordinates
 
 
 def _first_upstream_of_type(network: Any, entity_id: str, entity_type: type) -> str | None:
@@ -708,6 +737,8 @@ def _map_bbox(
     for route in routes.values():
         coordinates.extend(route["coordinates"])
         coordinates.extend(route["return_coordinates"])
+        for dynamic_leg in route.get("dynamic_leg_routes", {}).values():
+            coordinates.extend(dynamic_leg["coordinates"])
     for segment in _build_pipeline_segments(network, locations):
         coordinates.extend(segment["coordinates"])
     for link in _build_injection_links(network, locations):

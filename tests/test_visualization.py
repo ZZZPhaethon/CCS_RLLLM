@@ -5,6 +5,7 @@ from pathlib import Path
 from sim.entities import Emitter, InjectionWell, PhysicalState, Pipeline, Terminal
 from sim.network import PhysicalNetwork
 from sim.routes import route_distance_km
+from sim.network_scenarios import OFFSHORE_PIPELINE_ROUTE
 from sim.control.rule_based import RuleBasedActionGenerator
 from sim.visualization import (
     _connect_route_to_facilities,
@@ -18,9 +19,26 @@ from sim.visualization import (
     write_northern_lights_phase1_dashboard,
     write_northern_lights_phase2_dashboard,
 )
+from tests.fixtures.toy_networks import TOY_TWO_SOURCE_LOCATIONS, make_toy_two_source_network
 
 
 class VisualizationTests(unittest.TestCase):
+    def _toy_dashboard_locations(self):
+        locations = {
+            location_id: {"lat": lat, "lon": lon, "label": location_id}
+            for location_id, (lat, lon) in TOY_TWO_SOURCE_LOCATIONS.items()
+        }
+        locations.update(
+            {
+                "pipeline": {"lat": 60.58, "lon": 3.65, "label": "Pipeline midpoint"},
+                "manifold": {"lat": 60.56, "lon": 3.50, "label": "Manifold"},
+                "well_a": {"lat": 60.55, "lon": 3.46, "label": "Well A"},
+                "well_b": {"lat": 60.60, "lon": 3.52, "label": "Well B"},
+                "reservoir": {"lat": 60.55, "lon": 3.46, "label": "Reservoir"},
+            }
+        )
+        return locations
+
     def test_demo_trajectory_uses_one_hour_frames(self):
         payload = build_demo_trajectory(hours=8)
 
@@ -244,6 +262,25 @@ class VisualizationTests(unittest.TestCase):
         self.assertTrue(any(lat > 0.0 and lon < 1.0 for lat, lon in route))
         self.assertLess(abs(display_distance - original_distance) / original_distance, 0.03)
 
+    def test_dynamic_vessel_legs_are_cached_and_drawn(self):
+        network = make_toy_two_source_network()
+        locations = self._toy_dashboard_locations()
+
+        payload = build_trajectory(
+            network,
+            PhysicalState(),
+            locations=locations,
+            hours=1,
+            action_frames=[{"vessel_a": {"sail_to": "source_b"}}],
+        )
+        route = payload["map"]["routes"]["vessel_a"]
+
+        dynamic_leg = route["dynamic_leg_routes"]["source_a->source_b"]
+        self.assertGreater(len(dynamic_leg["coordinates"]), 2)
+        html = render_dashboard_html(payload)
+        self.assertIn("drawDynamicLegRoutes", html)
+        self.assertIn("source_a->source_b", html)
+
     def test_dashboard_html_contains_embedded_data_and_controls(self):
         payload = build_demo_trajectory(hours=2)
 
@@ -347,6 +384,23 @@ class VisualizationTests(unittest.TestCase):
         self.assertEqual(segment["source"], "oygarden_terminal")
         self.assertEqual(segment["target"], "aurora_subsea_manifold")
         self.assertEqual(segment["coordinates"][-1], (manifold["lat"], manifold["lon"]))
+
+    def test_map_draws_pipeline_main_segment_without_explicit_route_coordinates(self):
+        network = make_toy_two_source_network()
+        locations = self._toy_dashboard_locations()
+
+        payload = build_trajectory(network, PhysicalState(), locations=locations, hours=0)
+
+        segment = next(
+            segment
+            for segment in payload["map"]["pipeline_segments"]
+            if segment["source"] == "terminal" and segment["target"] == "manifold"
+        )
+        self.assertEqual(segment["component_id"], "pipeline")
+        self.assertEqual(len(segment["coordinates"]), len(OFFSHORE_PIPELINE_ROUTE))
+        self.assertEqual(segment["coordinates"][0], (locations["terminal"]["lat"], locations["terminal"]["lon"]))
+        self.assertEqual(segment["coordinates"][1], OFFSHORE_PIPELINE_ROUTE[1])
+        self.assertEqual(segment["coordinates"][-1], (locations["manifold"]["lat"], locations["manifold"]["lon"]))
 
     def test_map_separates_injection_links_from_pipeline_segments(self):
         payload = build_demo_trajectory(hours=2)
@@ -547,6 +601,11 @@ class VisualizationTests(unittest.TestCase):
         self.assertIn("if (entity.type === \"Reservoir\") return [\"inventory\", \"pressure\", \"pressure_margin\", \"injection_rate\"]", html)
         self.assertIn("return [\"inventory\"]", html)
         self.assertIn("syncChartMetricOptions(frame.entities[selected])", html)
+
+    def test_dashboard_injection_rate_metric_uses_well_snapshot_rate(self):
+        html = render_dashboard_html(build_demo_trajectory(hours=2))
+
+        self.assertIn("if (entity.injection_rate_tph !== undefined) return Number(entity.injection_rate_tph)", html)
 
     def test_dashboard_html_draws_capacity_limits_and_pipelines(self):
         payload = build_demo_trajectory(hours=2)

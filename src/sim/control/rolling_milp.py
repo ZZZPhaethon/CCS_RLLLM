@@ -29,7 +29,7 @@ from ..environment import (
     VESSEL_WAIT,
     CCSEnv,
 )
-from ..routes import route_distance_km
+from ..routes import route_distance_km, sea_route
 from .baselines import greedy_shuttle_policy
 from .milp import KNOTS_TO_KMH, _validate_static_solution, extract_params
 
@@ -490,9 +490,41 @@ def _sail_hours_between(env: CCSEnv, origin_id: str, destination_id: str, vessel
     if {origin_id, destination_id} == {str(route["origin"]), str(route["destination"])}:
         distance_km = float(route["distance_km"])
     else:
-        distance_km = route_distance_km([env.locations[origin_id], env.locations[destination_id]])
+        distance_km = _dynamic_leg_distance_km(env, route, origin_id, destination_id)
     speed_knots = max(1e-9, float(route["speed_knots"]))
     return max(1, math.ceil(distance_km / (speed_knots * KNOTS_TO_KMH)))
+
+
+def _dynamic_leg_distance_km(env: CCSEnv, route: dict, origin_id: str, destination_id: str) -> float:
+    leg_routes = route.setdefault("dynamic_leg_routes", {})
+    leg_id = f"{origin_id}->{destination_id}"
+    if leg_id not in leg_routes:
+        maritime_route = sea_route(env.locations[origin_id], env.locations[destination_id])
+        coordinates = _connect_route_to_endpoints(
+            maritime_route.coordinates,
+            env.locations[origin_id],
+            env.locations[destination_id],
+        )
+        leg_routes[leg_id] = {
+            "id": leg_id,
+            "origin": origin_id,
+            "destination": destination_id,
+            "provider": maritime_route.provider,
+            "distance_km": round(route_distance_km(coordinates), 2),
+            "coordinates": coordinates,
+        }
+    return float(leg_routes[leg_id]["distance_km"])
+
+
+def _connect_route_to_endpoints(coordinates, origin, destination):
+    connected = list(coordinates)
+    if not connected:
+        return [origin, destination]
+    if connected[0] != origin:
+        connected.insert(0, origin)
+    if connected[-1] != destination:
+        connected.append(destination)
+    return connected
 
 
 def _action_to_destination(env: CCSEnv, vessel_id: str, destination_id: str) -> int:

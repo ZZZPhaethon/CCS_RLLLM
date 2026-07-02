@@ -65,7 +65,7 @@ class ControllerComparisonExperimentTests(unittest.TestCase):
         action = factories["rule_based"](env)(env)
 
         self.assertEqual(action["vessels"], [VESSEL_WAIT] * len(env.vessel_ids))
-        self.assertEqual(action["wells"], [MAX_WELL_RATE_MTPA, MIN_WELL_RATE_MTPA])
+        self.assertEqual(action["wells"], [MAX_WELL_RATE_MTPA])
 
     def test_metric_rows_and_summary_include_solve_time(self):
         from experiments import compare_controllers_same_scenarios as compare
